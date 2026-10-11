@@ -71,6 +71,12 @@ def run(OUT, all_text_path):
   hit, tot = sum(x["found"] for x in res), len(res)
   M["gold_recall_overall"] = [hit, tot, round(100 * hit / tot, 1)]
   M["gold_recall_note"] = f"recall on {tot} hand-verified PII items; not a claim of total-document coverage"
+  # Effective coverage = kept from the LLM: detected OR sealed inside a whole-figure redaction (fail-closed).
+  # This is the number that matches "no unidentified instances passed downstream".
+  red_pages = {r["page"] for r in meta.get("figure_redactions", [])}
+  eff = [g["found"] or (g["context"] == "image" and g["page"] in red_pages) for g in res]
+  M["gold_effective_coverage"] = [sum(eff), len(eff), round(100 * sum(eff) / len(eff), 1)]
+  M["figure_redactions"] = meta.get("figure_redactions", [])
 
   # Structure retention: share of extracted characters passed to the LLM unchanged. Redaction is in-place token
   # substitution, so structural units (paragraphs/rows/cells) and their order are always preserved; only PII spans
@@ -92,7 +98,7 @@ def run(OUT, all_text_path):
   json.dump(M, open(os.path.join(OUT, "metrics.json"), "w", encoding="utf-8"), indent=1, default=dict)
   print(json.dumps({k: M[k] for k in ["total_findings", "unique_people", "by_artifact", "by_context", "by_tier",
                                       "gold_recall_text", "gold_recall_image", "gold_recall_overall",
-                                      "text_preserved_pct", "figure_findings_baseline_ocr",
+                                      "gold_effective_coverage", "text_preserved_pct", "figure_findings_baseline_ocr",
                                       "figure_findings_enhanced_ocr", "pdf_pages_with_embedded_figures",
                                       "ssn_test_range_count", "fp_suppressed_role_mailboxes"]}, indent=0, default=dict))
   print("missed:", [g for g in res if not g["found"]])

@@ -528,7 +528,7 @@ def mask_pdf(segs, T, conf_min=0.6):
     for s in segs:
         if s.artifact == A_PDF:
             by_page[s.page].append(s)
-    paths = []
+    paths, redactions = [], []
     for i, page_path in enumerate(PAGES, 1):
         img = Image.open(page_path).convert("RGB")
         dr = ImageDraw.Draw(img)
@@ -556,18 +556,29 @@ def mask_pdf(segs, T, conf_min=0.6):
                         fs -= 2
                     f2 = get_font(fs)
                     dr.text((x0 + 3, y0 + max(0, (y1 - y0 - fs) / 2) - 1), tok, fill=(240, 200, 90), font=f2)
-        # fail-safe: OCR recall inside figures is ~56%, so any figure with a finding is
-        # redacted whole (layout kept, label lists what was detected)
+        # fail-safe: OCR recall inside figures is ~56%, so a figure is redacted whole when it either
+        # (a) has a detected finding, or (b) is unreadable - too few OCR words for its size to vet it.
+        # (b) is fail-closed: a sparse chart and an unreadable PII screenshot look alike to OCR, so we
+        # redact both rather than risk passing undetected PII downstream (brief: no unidentified instances).
         page_img = Image.open(page_path)
         figs = [r for r in pdf_regions(page_img) if r[0] == "image"]
         for f in figs:
+            inside = [w for s in by_page[i] if s.ctx == "image" for w in s.words
+                      if f[1] <= w[2][0] <= f[3] and f[2] <= w[2][1] <= f[4]]
             cats = sorted({sp[2] for s in by_page[i] if s.ctx == "image" for sp in s.spans
                            for w in s.words[:1] if f[1] <= w[2][0] <= f[3] and f[2] <= w[2][1] <= f[4]})
-            if cats:
+            area_in2 = (f[3] - f[1]) * (f[4] - f[2]) / (300.0 * 300.0)   # page rendered at 300 dpi
+            unreadable = len(inside) < 1.5 * area_in2
+            if cats or unreadable:
+                redactions.append(dict(page=i, reason=("pii" if cats else "unreadable"), detected=cats,
+                                       box=[int(f[1]), int(f[2]), int(f[3]), int(f[4])]))
                 dr.rectangle([f[1], f[2], f[3], f[4]], fill=(20, 30, 50))
                 fl = get_font(40); fs_ = get_font(30)
-                dr.text((f[1] + 40, f[2] + 40), "FIGURE REDACTED - image contains personal data", fill=(240, 200, 90), font=fl)
-                dr.text((f[1] + 40, f[2] + 100), "Detected: " + ", ".join(cats), fill=(220, 225, 235), font=fs_)
+                head = "FIGURE REDACTED - image contains personal data" if cats else \
+                       "FIGURE REDACTED - unreadable image, redacted as a precaution"
+                detail = ", ".join(cats) if cats else "OCR coverage too low to vet contents"
+                dr.text((f[1] + 40, f[2] + 40), head, fill=(240, 200, 90), font=fl)
+                dr.text((f[1] + 40, f[2] + 100), "Detected: " + detail, fill=(220, 225, 235), font=fs_)
                 dr.text((f[1] + 40, f[2] + 145), "Original held in restricted store; see pii_inventory.csv", fill=(220, 225, 235), font=fs_)
         p = os.path.join(WORK, f"masked_p{i:03d}.jpg")
         img.save(p, quality=72, optimize=True)
@@ -577,7 +588,7 @@ def mask_pdf(segs, T, conf_min=0.6):
     w0, h0 = Image.open(PAGES[0]).size          # rendered at 300 dpi -> keep original page size
     with open(out, "wb") as f:
         f.write(img2pdf.convert(paths, layout_fun=img2pdf.get_layout_fun((img2pdf.in_to_pt(w0 / 300), img2pdf.in_to_pt(h0 / 300)))))
-    return out
+    return out, redactions
 
 
 def _tok(T):
@@ -717,7 +728,7 @@ if __name__ == "__main__":
                 SPAN_CACHE[t] = para_spans(t)
 
     print("Stage 3/4  writing masked copies…", flush=True)
-    pdf_out = mask_pdf(inv_segs, T)
+    pdf_out, fig_redactions = mask_pdf(inv_segs, T)
     docx_out, nd = mask_docx(inv_segs, T)
     pptx_out, np_ = mask_pptx(T)
 
@@ -735,6 +746,7 @@ if __name__ == "__main__":
     for s in inv_segs:
         text_chars[s.artifact] += len(s.text)
     json.dump(dict(pages=pages_meta, pdf_native_chars=pdf_native_chars, text_chars=text_chars,
+                   figure_redactions=fig_redactions,
                    base_fig=base_fig_rows, masked=[pdf_out, docx_out, pptx_out]),
               open(os.path.join(OUT, "run_meta.json"), "w", encoding="utf-8"), default=str, indent=1)
     print("Stage 4/4  computing metrics…", flush=True)
