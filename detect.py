@@ -59,6 +59,11 @@ def regex_spans(text):
             add(m, "EMAIL", 0.9, "role-mailbox (organizational contact)")
         else:
             add(m, "EMAIL", 0.99, "email-pattern")
+    # OCR sometimes splits the address around '@' ("n.osadebe @cadencefg.com"); require a space + a real TLD so
+    # ordinary text ("meet @ 5pm") is not matched
+    for m in re.finditer(r"[A-Za-z0-9][A-Za-z0-9._%+-]*\s+@\s*[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}", text):
+        local = m.group().split("@")[0].strip().lower()
+        add(m, "EMAIL", 0.85, "role-mailbox (ocr-split)" if local in FUNCTIONAL_MAILBOXES else "email-pattern (ocr-split @)")
 
     for m in re.finditer(r"\b(?:EMP|DIR)-\d{4,5}\b|\bMER-[A-Z]{2}-\d{4}\b", text):
         add(m, "EMPLOYEE_ID", 0.97, "employee/vendor-id-pattern")

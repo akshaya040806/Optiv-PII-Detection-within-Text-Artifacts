@@ -660,8 +660,9 @@ def mask_docx(segs, T):
 
 
 def leakage_gate(rows):
-    """Independent verification: re-open the masked DOCX/PPTX and confirm no detected PII value
-    survives in the text layer. Catches masking bugs (detected but not removed), not detection misses."""
+    """Independent verification: re-open the masked outputs and confirm no detected PII value survives.
+    DOCX/PPTX are checked in their text layer; the rasterized PDF is RE-OCR'd from the masked page images.
+    Catches masking bugs (detected but not removed), not detection misses."""
     texts = {}
     d = Document(os.path.join(OUT, stem(DOCX) + "_MASKED.docx"))
     parts = [p.text for p in d.paragraphs] + [c.text for tb in d.tables for row in tb.rows for c in row.cells]
@@ -677,6 +678,10 @@ def leakage_gate(rows):
         if s.has_notes_slide:
             parts.append(s.notes_slide.notes_text_frame.text)
     texts[A_PPTX] = "\n".join(parts)
+    # PDF output is rasterized, so re-OCR the masked page images to read what actually renders
+    print("  re-OCR of masked PDF pages for the leakage gate…", flush=True)
+    masked_pages = sorted(glob.glob(os.path.join(WORK, "masked_p*.jpg")))
+    texts[A_PDF] = " ".join(_run([TESSERACT, p, "stdout", "--psm", "3"]).stdout for p in masked_pages)
     survivors = []
     for r in rows:
         t = texts.get(r["artifact"])
@@ -798,7 +803,7 @@ if __name__ == "__main__":
         for L in residual_leaks[:10]:
             print(f"       {L['artifact']} | {L['category']} | {L['value']!r} | {L['location']}", flush=True)
     else:
-        print("  leakage gate: 0 detected PII values survive in masked DOCX/PPTX text", flush=True)
+        print("  leakage gate PASSED: 0 detected PII values survive in masked DOCX/PPTX text or re-OCR'd PDF", flush=True)
     json.dump(dict(pages=pages_meta, pdf_native_chars=pdf_native_chars, text_chars=text_chars,
                    figure_redactions=fig_redactions, residual_leaks=residual_leaks,
                    uninspected_media=uninspected_media,
