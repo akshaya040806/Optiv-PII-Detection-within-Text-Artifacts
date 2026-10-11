@@ -72,13 +72,14 @@ def run(OUT, all_text_path):
   M["gold_recall_overall"] = [hit, tot, round(100 * hit / tot, 1)]
   M["gold_recall_note"] = f"recall on {tot} hand-verified PII items; not a claim of total-document coverage"
 
-  # Structure retention: share of extracted text passed through unchanged (PII replaced by same-position tokens).
-  # shortcut: char-ratio proxy for "80% structure retained + context preserved"; upgrade to a diff/alignment check if challenged.
+  # Structure retention: share of extracted characters passed to the LLM unchanged. Redaction is in-place token
+  # substitution, so structural units (paragraphs/rows/cells) and their order are always preserved; only PII spans
+  # change. A lower % means the file is PII-dense (e.g. the PPTX contact directory), NOT that structure was lost.
   masked_chars = Counter()
   for r in rows:
       masked_chars[r["artifact"]] += len(r["value"])
-  M["structure_retention_pct"] = {a: round(100 * (1 - masked_chars[a] / c), 1)
-                                   for a, c in meta.get("text_chars", {}).items() if c}
+  M["text_preserved_pct"] = {a: round(100 * (1 - masked_chars[a] / c), 1)
+                             for a, c in meta.get("text_chars", {}).items() if c}
 
   policy = open(all_text_path, encoding="utf-8").read()
   M["fp_suppressed_role_mailboxes"] = sorted(set(re.findall(r"\b(?:brc|gerc|orc|remco|board)@cadencefg\.com", policy)))
@@ -91,7 +92,7 @@ def run(OUT, all_text_path):
   json.dump(M, open(os.path.join(OUT, "metrics.json"), "w", encoding="utf-8"), indent=1, default=dict)
   print(json.dumps({k: M[k] for k in ["total_findings", "unique_people", "by_artifact", "by_context", "by_tier",
                                       "gold_recall_text", "gold_recall_image", "gold_recall_overall",
-                                      "structure_retention_pct", "figure_findings_baseline_ocr",
+                                      "text_preserved_pct", "figure_findings_baseline_ocr",
                                       "figure_findings_enhanced_ocr", "pdf_pages_with_embedded_figures",
                                       "ssn_test_range_count", "fp_suppressed_role_mailboxes"]}, indent=0, default=dict))
   print("missed:", [g for g in res if not g["found"]])
