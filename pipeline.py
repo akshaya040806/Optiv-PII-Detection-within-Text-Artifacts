@@ -731,7 +731,10 @@ if __name__ == "__main__":
                          mentions=sum(1 for r in rows if r["token"] == tok)))
     with open(os.path.join(OUT, "person_token_map.csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=list(xref[0].keys())); w.writeheader(); w.writerows(xref)
-    json.dump(dict(pages=pages_meta, pdf_native_chars=pdf_native_chars,
+    text_chars = Counter()
+    for s in inv_segs:
+        text_chars[s.artifact] += len(s.text)
+    json.dump(dict(pages=pages_meta, pdf_native_chars=pdf_native_chars, text_chars=text_chars,
                    base_fig=base_fig_rows, masked=[pdf_out, docx_out, pptx_out]),
               open(os.path.join(OUT, "run_meta.json"), "w", encoding="utf-8"), default=str, indent=1)
     print("Stage 4/4  computing metrics…", flush=True)
