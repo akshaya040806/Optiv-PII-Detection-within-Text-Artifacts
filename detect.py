@@ -1,5 +1,6 @@
 import re
 
+# PII detection rules: patterns, checksums, context words, name heuristics
 MONTHS = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
 DATE = rf"(?:\d{{1,2}}[/.-]\d{{1,2}}[/.-]\d{{4}}|\d{{1,2}}\s+{MONTHS}\s+\d{{4}}|{MONTHS}\s+\d{{1,2}},?\s+\d{{4}})"
 
