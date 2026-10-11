@@ -51,7 +51,7 @@ def regex_spans(text):
     def add(m, cat, conf, rule, g=0):
         out.append((m.start(g), m.end(g), cat, conf, rule))
 
-    for m in re.finditer(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", text):
+    for m in re.finditer(r"[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", text):
         local = m.group().split("@")[0].lower()
         if local in FUNCTIONAL_MAILBOXES:
             continue  # role mailbox, not an individual (logged as suppressed)
