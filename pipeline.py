@@ -313,12 +313,18 @@ def extract_pdf():
         enh_words = []
         for k, f in enumerate(figs):
             enh_words += [dict(w, src="ocr-enhanced", fig=k) for w in enhance_and_ocr(img, f[1:], f"p{i}_f{k}")]
+        # dense tables: whole-page OCR merges columns and can drop names (e.g. the Speak Up reporter column),
+        # leaving them un-maskable. A focused crop+upscale pass recovers them so detection can mask them.
+        enh_table_words = []
+        for k, tb in enumerate(r for r in regions if r[0] == "table"):
+            enh_table_words += enhance_and_ocr(img, tb[1:], f"p{i}_tb{k}")
         base_kept, base_fig = [], []
         for w in base:
             (base_fig if ctx_for(w["box"], figs) == "image" else base_kept).append(w)
         pages_meta.append(dict(page=i, native_chars=0, ocr_words=len(base), figures=len(figs),
                                regions=Counter(r[0] for r in regions)))
-        for src_words, method in ((base_kept, "ocr"), (base_fig, "ocr-baseline-figure"), (enh_words, "ocr-enhanced")):
+        for src_words, method in ((base_kept, "ocr"), (base_fig, "ocr-baseline-figure"),
+                                  (enh_words, "ocr-enhanced"), (enh_table_words, "ocr-enhanced")):
             for text, idx in group_paras(src_words):
                 c = ctx_for(idx[0][2], regions)
                 if method == "ocr-baseline-figure":
@@ -504,10 +510,15 @@ def build_inventory(segs):
     for s, sp in order:
         if len(s.text[sp[0]:sp[1]].split()) > 1:
             T.person(s.text[sp[0]:sp[1]], s.artifact)
+    seen = set()
     for s in segs:
         for a, b, cat, conf, rule in s.spans:
             val = re.sub(r"\s+", " ", s.text[a:b]).strip()
             tok = T.person(val, s.artifact) if cat == "PERSON" else T.value(cat, val)
+            key = (s.artifact, s.loc, cat, tok)   # base + enhanced table passes can re-find the same value
+            if key in seen:
+                continue
+            seen.add(key)
             rows.append(dict(artifact=s.artifact, location=s.loc, context=s.ctx, method=s.method,
                              category=cat, tier=D.TIER.get(cat, "Medium"), value=val, token=tok,
                              confidence=conf, rule=rule,
@@ -571,7 +582,8 @@ def mask_pdf(segs, T, conf_min=0.6):
         # through on the strength of detection alone. Charts are sacrificed: the correct trade for a PII
         # gate (brief: no unidentified instances passed downstream).
         page_img = Image.open(page_path)
-        figs = [r for r in pdf_regions(page_img) if r[0] == "image"]
+        page_regions = pdf_regions(page_img)
+        figs = [r for r in page_regions if r[0] == "image"]
         for f in figs:
             cats = sorted({sp[2] for s in by_page[i] if s.ctx == "image" for sp in s.spans
                            for w in s.words[:1] if f[1] <= w[2][0] <= f[3] and f[2] <= w[2][1] <= f[4]})
@@ -585,6 +597,21 @@ def mask_pdf(segs, T, conf_min=0.6):
             dr.text((f[1] + 40, f[2] + 40), head, fill=(240, 200, 90), font=fl)
             dr.text((f[1] + 40, f[2] + 100), "Detected: " + detail, fill=(220, 225, 235), font=fs_)
             dr.text((f[1] + 40, f[2] + 145), "Original held in restricted store; see pii_inventory.csv", fill=(220, 225, 235), font=fs_)
+        # Fail closed on scanned tables with personal data: multi-column OCR can render a name it never
+        # recognized as text (e.g. the Speak Up reporter column), so per-name masking isn't trustworthy -
+        # seal the whole table instead.
+        for tb in [r for r in page_regions if r[0] == "table"]:
+            x0, y0, x1, y1 = tb[1], tb[2], tb[3], tb[4]
+            cats = sorted({sp[2] for s in by_page[i] for sp in s.spans for w in s.words
+                           if not (w[1] <= sp[0] or w[0] >= sp[1]) and x0 <= w[2][0] <= x1 and y0 <= w[2][1] <= y1})
+            if not cats:
+                continue
+            redactions.append(dict(page=i, reason="table-pii", detected=cats,
+                                   box=[int(x0), int(y0), int(x1), int(y1)]))
+            dr.rectangle([x0, y0, x1, y1], fill=(20, 30, 50))
+            dr.text((x0 + 30, y0 + 20), "TABLE REDACTED - contains personal data", fill=(240, 200, 90), font=get_font(34))
+            dr.text((x0 + 30, y0 + 70), "Detected: " + ", ".join(cats), fill=(220, 225, 235), font=get_font(26))
+            dr.text((x0 + 30, y0 + 105), "Original held in restricted store; see pii_inventory.csv", fill=(220, 225, 235), font=get_font(26))
         p = os.path.join(WORK, f"masked_p{i:03d}.jpg")
         img.save(p, quality=72, optimize=True)
         paths.append(p)

@@ -125,6 +125,8 @@ def regex_spans(text):
             continue
         if re.fullmatch(r"\d{3}-\d{2}-\d{4}", s) or re.fullmatch(DATE, s):
             continue
+        if re.match(r"(?:19|20)\d\d-\d", s):      # year-prefixed reference id (ISS-2026-0112), not a phone
+            continue
         c = _ctx(text, m.start(), m.end(), 25)
         # whole-segment numeric (e.g. an OCR-wrapped "20 7555 0129" cell) is phone-like even without +/keyword
         whole_number = s == text.strip()
