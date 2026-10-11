@@ -90,8 +90,10 @@ def run(OUT, all_text_path):
   M["text_preserved_pct"] = {a: round(100 * (1 - masked_chars[a] / c), 1)
                              for a, c in meta.get("text_chars", {}).items() if c}
 
-  policy = open(all_text_path, encoding="utf-8").read()
-  M["fp_suppressed_role_mailboxes"] = sorted(set(re.findall(r"\b(?:brc|gerc|orc|remco|board)@cadencefg\.com", policy)))
+  M["role_mailboxes_redacted"] = sorted({r["value"] for r in rows if r["rule"].startswith("role-mailbox")})
+  # Uninspected embedded media: formats we cannot OCR (vector EMF/SVG/WMF) are flagged for manual review,
+  # not silently passed. A PII gate must surface what it could not verify.
+  M["uninspected_media"] = meta.get("uninspected_media", [])
   M["ssn_test_range_count"] = sum(1 for r in rows if r["category"] == "SSN" and r["value"].startswith("9"))
   M["pan_lookalikes_rejected_example"] = "GRP-POL-001, RSK-4488, CTL-IAM-04 never match: PAN needs AAAAA9999A with 4th char in P,C,H,F,A,T,B,L,J,G"
 
@@ -104,7 +106,7 @@ def run(OUT, all_text_path):
                                       "gold_effective_coverage", "residual_leak_count", "text_preserved_pct",
                                       "figure_findings_baseline_ocr",
                                       "figure_findings_enhanced_ocr", "pdf_pages_with_embedded_figures",
-                                      "ssn_test_range_count", "fp_suppressed_role_mailboxes"]}, indent=0, default=dict))
+                                      "ssn_test_range_count", "role_mailboxes_redacted", "uninspected_media"]}, indent=0, default=dict))
   print("missed:", [g for g in res if not g["found"]])
   print("cross:", M["cross_artifact_people"])
   print({a: len(v) for a, v in img_only.items()})

@@ -21,6 +21,8 @@ ap.add_argument("--tesseract", default=None, help="full path to tesseract.exe if
 ap.add_argument("--poppler", default=None, help="folder holding pdftoppm.exe / pdftotext.exe if not on PATH")
 ap.add_argument("--no-gui", action="store_true",
                  help="never pop up file-picker windows; fail instead if --pdf/--docx/--pptx are missing")
+ap.add_argument("--ner-model", default="en_core_web_sm",
+                 help="spaCy model for name NER; use en_core_web_trf (if installed) for stronger recall/generalization")
 ARGS = ap.parse_args()
 
 
@@ -171,10 +173,18 @@ def render_pdf_pages():
 
 A_PDF, A_DOCX, A_PPTX = "Risk Policy (PDF)", "TPRM Training (DOCX)", "Org Pack (PPTX)"
 
-try:
-    nlp = spacy.load("en_core_web_sm")
-except OSError:
-    sys.exit("spaCy English model missing. Run:  python -m spacy download en_core_web_sm")
+def _load_nlp(name):
+    try:
+        return spacy.load(name)
+    except OSError:
+        if name != "en_core_web_sm":
+            print(f"NER model '{name}' not installed; falling back to en_core_web_sm "
+                  f"(install:  python -m spacy download {name})", flush=True)
+            return _load_nlp("en_core_web_sm")
+        sys.exit("spaCy English model missing. Run:  python -m spacy download en_core_web_sm")
+
+
+nlp = _load_nlp(ARGS.ner_model)
 
 
 class Seg:
@@ -772,6 +782,16 @@ if __name__ == "__main__":
     text_chars = Counter()
     for s in inv_segs:
         text_chars[s.artifact] += len(s.text)
+    # embedded media we cannot OCR (vector EMF/SVG/WMF) -> flag for manual review, don't claim it's clean
+    uninspected_media = []
+    for path, art in ((DOCX, A_DOCX), (PPTX, A_PPTX)):
+        for name in zipfile.ZipFile(path).namelist():
+            if "/media/" in name and not name.lower().endswith((".png", ".jpg", ".jpeg")):
+                uninspected_media.append(dict(artifact=art, media=os.path.basename(name)))
+    if uninspected_media:
+        print(f"  note: {len(uninspected_media)} embedded vector media (EMF/SVG/WMF) flagged for manual review "
+              f"(cannot OCR to verify)", flush=True)
+
     residual_leaks = leakage_gate(rows)
     if residual_leaks:
         print(f"  !! LEAKAGE GATE: {len(residual_leaks)} detected PII value(s) still present in masked text:", flush=True)
@@ -781,6 +801,7 @@ if __name__ == "__main__":
         print("  leakage gate: 0 detected PII values survive in masked DOCX/PPTX text", flush=True)
     json.dump(dict(pages=pages_meta, pdf_native_chars=pdf_native_chars, text_chars=text_chars,
                    figure_redactions=fig_redactions, residual_leaks=residual_leaks,
+                   uninspected_media=uninspected_media,
                    base_fig=base_fig_rows, masked=[pdf_out, docx_out, pptx_out]),
               open(os.path.join(OUT, "run_meta.json"), "w", encoding="utf-8"), default=str, indent=1)
     print("Stage 4/4  computing metrics…", flush=True)

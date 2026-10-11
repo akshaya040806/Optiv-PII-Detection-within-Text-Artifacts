@@ -53,9 +53,12 @@ def regex_spans(text):
 
     for m in re.finditer(r"[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", text):
         local = m.group().split("@")[0].lower()
+        # role mailboxes (board.chair@, brc@ ...) are organizational not personal, but they are still
+        # contact details - redact them too, just tag them distinctly for the audit trail
         if local in FUNCTIONAL_MAILBOXES:
-            continue  # role mailbox, not an individual (logged as suppressed)
-        add(m, "EMAIL", 0.99, "email-pattern")
+            add(m, "EMAIL", 0.9, "role-mailbox (organizational contact)")
+        else:
+            add(m, "EMAIL", 0.99, "email-pattern")
 
     for m in re.finditer(r"\b(?:EMP|DIR)-\d{4,5}\b|\bMER-[A-Z]{2}-\d{4}\b", text):
         add(m, "EMPLOYEE_ID", 0.97, "employee/vendor-id-pattern")
@@ -118,7 +121,9 @@ def regex_spans(text):
         if re.fullmatch(r"\d{3}-\d{2}-\d{4}", s) or re.fullmatch(DATE, s):
             continue
         c = _ctx(text, m.start(), m.end(), 25)
-        strong = s.startswith("+") or s.startswith("(") or re.search(r"mobile|phone|tel|line|reach|call", c)
+        # whole-segment numeric (e.g. an OCR-wrapped "20 7555 0129" cell) is phone-like even without +/keyword
+        whole_number = s == text.strip()
+        strong = s.startswith("+") or s.startswith("(") or whole_number or re.search(r"mobile|phone|tel|line|reach|call|contact", c)
         if strong:
             add(m, "PHONE", 0.9 if s.startswith("+") else 0.8, "phone-format+context")
 

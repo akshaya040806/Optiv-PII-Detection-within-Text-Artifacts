@@ -7,3 +7,8 @@ python-pptx
 img2pdf
 wordfreq
 rapidfuzz
+
+# Optional: stronger transformer NER backend (pulls PyTorch, ~2.5GB). Then run with
+#   python pipeline.py --ner-model en_core_web_trf ...
+# spacy-transformers
+# en_core_web_trf  (install: python -m spacy download en_core_web_trf)
