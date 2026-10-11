@@ -1,0 +1,9 @@
+numpy
+pillow
+opencv-python-headless
+spacy
+python-docx
+python-pptx
+img2pdf
+wordfreq
+rapidfuzz

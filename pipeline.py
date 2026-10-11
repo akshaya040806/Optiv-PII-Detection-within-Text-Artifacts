@@ -1,0 +1,740 @@
+import csv, io, json, os, re, shutil, subprocess, sys, zipfile, copy
+from collections import defaultdict, Counter
+
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+import spacy
+from docx import Document
+from pptx import Presentation
+
+sys.path.insert(0, os.path.dirname(__file__))
+import detect as D
+
+import argparse, glob
+
+ap = argparse.ArgumentParser(description="Cadence PII detection pipeline (runs fully offline)")
+ap.add_argument("--pdf", default=None, help="path to the Group Risk Management Policy PDF")
+ap.add_argument("--docx", default=None, help="path to the TPRM Training .docx")
+ap.add_argument("--pptx", default=None, help="path to the Organizational Pack .pptx")
+ap.add_argument("--out", default=None, help="folder for results (created if missing)")
+ap.add_argument("--tesseract", default=None, help="full path to tesseract.exe if it is not on PATH")
+ap.add_argument("--poppler", default=None, help="folder holding pdftoppm.exe / pdftotext.exe if not on PATH")
+ap.add_argument("--no-gui", action="store_true",
+                 help="never pop up file-picker windows; fail instead if --pdf/--docx/--pptx are missing")
+ARGS = ap.parse_args()
+
+
+def _pick_file(title, filetypes):
+    """Pop up a 'choose file' window. Exits with a clear message if no display is available."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError:
+        sys.exit("No file path was given and the file-picker window isn't available here "
+                  "(tkinter missing). Pass --pdf/--docx/--pptx on the command line instead, "
+                  "or use --no-gui to get this message earlier. See README.md.")
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    path = filedialog.askopenfilename(title=title, filetypes=filetypes)
+    root.destroy()
+    if not path:
+        sys.exit(f"No file selected for: {title}. Re-run and pick a file, or pass it with the matching --flag.")
+    return path
+
+
+def _pick_folder(title):
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError:
+        return "pii_output"
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    path = filedialog.askdirectory(title=title)
+    root.destroy()
+    return path or "pii_output"
+
+
+if ARGS.no_gui and not (ARGS.pdf and ARGS.docx and ARGS.pptx):
+    sys.exit("--no-gui was set but --pdf/--docx/--pptx were not all given. See README.md.")
+
+if not ARGS.pdf:
+    print("No --pdf given: opening a file-picker window for the Risk Management Policy PDF…", flush=True)
+    ARGS.pdf = _pick_file("Select the Group Risk Management Policy PDF", [("PDF files", "*.pdf")])
+if not ARGS.docx:
+    print("No --docx given: opening a file-picker window for the TPRM Training Word file…", flush=True)
+    ARGS.docx = _pick_file("Select the TPRM Training .docx", [("Word documents", "*.docx")])
+if not ARGS.pptx:
+    print("No --pptx given: opening a file-picker window for the Organizational Pack PowerPoint…", flush=True)
+    ARGS.pptx = _pick_file("Select the Organizational Pack .pptx", [("PowerPoint files", "*.pptx")])
+if not ARGS.out:
+    print("No --out given: opening a folder-picker window for where to save results…", flush=True)
+    ARGS.out = _pick_folder("Choose a folder for the results (will be created if needed)")
+
+PDF, DOCX, PPTX = (os.path.abspath(x) for x in (ARGS.pdf, ARGS.docx, ARGS.pptx))
+OUT = os.path.abspath(ARGS.out)
+WORK = os.path.join(OUT, "_work")
+for d_ in (OUT, WORK, os.path.join(WORK, "pages"), os.path.join(WORK, "tsv")):
+    os.makedirs(d_, exist_ok=True)
+for f_ in (PDF, DOCX, PPTX):
+    if not os.path.exists(f_):
+        sys.exit(f"File not found: {f_}")
+
+
+_COMMON_TESSERACT = [r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"]
+_COMMON_POPPLER_GLOBS = [r"C:\poppler*\Library\bin", r"C:\Program Files\poppler*\Library\bin",
+                         r"C:\Program Files\poppler*\bin"]
+
+
+def _tool(name, folder):
+    exe = name + (".exe" if os.name == "nt" else "")
+    if folder:
+        cand = os.path.join(folder, exe)
+        if os.path.exists(cand):
+            return cand
+        if os.path.exists(folder) and os.path.isfile(folder):
+            return folder
+    found = shutil.which(name)
+    if found:
+        return found
+    # try common Windows install locations before giving up
+    if name == "tesseract":
+        for c in _COMMON_TESSERACT:
+            if os.path.exists(c):
+                return c
+    else:
+        for pat in _COMMON_POPPLER_GLOBS:
+            for d in glob.glob(pat):
+                cand = os.path.join(d, exe)
+                if os.path.exists(cand):
+                    return cand
+                
+    # ask with a file picker instead of just failing
+    if not ARGS.no_gui:
+        flag = "--tesseract" if name == "tesseract" else "--poppler"
+        print(f"Cannot find '{name}' automatically: opening a file-picker window for {exe}…", flush=True)
+        picked = _pick_file(f"Select {exe}", [("Executable", "*.exe")] if os.name == "nt" else [("All files", "*")])
+        if os.path.basename(picked).lower().startswith(name):
+            return picked
+    sys.exit(f"Cannot find '{name}'. Install it or pass its location "
+             f"({'--tesseract' if name == 'tesseract' else '--poppler'}). See README.md.")
+
+
+TESSERACT = _tool("tesseract", ARGS.tesseract)
+PDFTOPPM = _tool("pdftoppm", ARGS.poppler)
+PDFTOTEXT = _tool("pdftotext", ARGS.poppler)
+
+
+def _font_path():
+    for c in ("C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf",
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+              "/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/Library/Fonts/Arial Bold.ttf"):
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def get_font(size):
+    fp = _font_path()
+    try:
+        return ImageFont.truetype(fp, size) if fp else ImageFont.load_default(size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _run(cmd):
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+
+def stem(path):
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def render_pdf_pages():
+    """Stage 1a: turn each scanned PDF page into a 300-dpi image and OCR it (cached in _work)."""
+    pages = sorted(glob.glob(os.path.join(WORK, "pages", "p-*.png")))
+    if not pages:
+        print("  rendering PDF pages at 300 dpi…", flush=True)
+        r = _run([PDFTOPPM, "-r", "300", "-png", PDF, os.path.join(WORK, "pages", "p")])
+        if r.returncode != 0:
+            sys.exit("pdftoppm failed: " + r.stderr)
+        pages = sorted(glob.glob(os.path.join(WORK, "pages", "p-*.png")))
+    for n, pg in enumerate(pages, 1):
+        tsv = os.path.join(WORK, "tsv", f"p-{n:03d}.tsv")
+        if not os.path.exists(tsv):
+            print(f"  OCR page {n}/{len(pages)}", flush=True)
+            open(tsv, "w", encoding="utf-8").write(ocr_tsv(pg))
+    return pages
+
+A_PDF, A_DOCX, A_PPTX = "Risk Policy (PDF)", "TPRM Training (DOCX)", "Org Pack (PPTX)"
+
+try:
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    sys.exit("spaCy English model missing. Run:  python -m spacy download en_core_web_sm")
+
+
+class Seg:
+    def __init__(self, artifact, loc, ctx, text, method, words=None, page=None, image=None):
+        self.artifact, self.loc, self.ctx, self.text, self.method = artifact, loc, ctx, text, method
+        self.words = words or []   # list of (cstart, cend, (x0,y0,x1,y1))
+        self.page, self.image = page, image
+        self.spans = []
+
+
+def tsv_words(tsv_text, ox=0, oy=0, scale=1.0, min_conf=-1):
+    rows = list(csv.DictReader(io.StringIO(tsv_text), delimiter="\t", quoting=csv.QUOTE_NONE))
+    words = []
+    for r in rows:
+        if r["level"] != "5" or not r["text"].strip():
+            continue
+        if float(r["conf"]) < min_conf:
+            continue
+        x, y, w, h = (int(r[k]) for k in ("left", "top", "width", "height"))
+        words.append(dict(b=int(r["block_num"]), p=int(r["par_num"]), l=int(r["line_num"]), t=r["text"],
+                          box=(ox + x / scale, oy + y / scale, ox + (x + w) / scale, oy + (y + h) / scale)))
+    return words
+
+
+def group_paras(words):
+    paras = defaultdict(list)
+    for w in words:
+        paras[(w["b"], w["p"])].append(w)
+    out = []
+    for key, ws in paras.items():
+        text, idx = "", []
+        last_line = None
+        for w in ws:
+            if text:
+                text += " "
+            s = len(text)
+            text += w["t"]
+            idx.append((s, len(text), w["box"]))
+        out.append((text, idx))
+    return out
+
+
+# ---------------- PDF: region classification ----------------
+def pdf_regions(img):
+    a = np.asarray(img.convert("RGB")).astype(int)
+    H, W, _ = a.shape
+    regions = []  # (ctx, x0,y0,x1,y1)
+    # callouts: gold / red vertical bar near left margin
+    for x in range(300, 340, 2):
+        col = a[:, x, :]
+        sat = ((col.max(1) - col.min(1)) > 60) & (col[:, 0] > 150)
+        ys = np.where(sat)[0]
+        if len(ys) > 80:
+            runs = np.split(ys, np.where(np.diff(ys) > 3)[0] + 1)
+            for r in runs:
+                if len(r) > 80:
+                    regions.append(("narrative", x, r[0], W - 280, r[-1]))
+            break
+    import cv2
+    g = ((np.abs(a[:, :, 0] - a[:, :, 2]) < 12) & (a[:, :, 0] > 195) & (a[:, :, 0] < 240)).astype(np.uint8) * 255
+    cnts, _ = cv2.findContours(g, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        if w > 0.3 * W and h > 300 and h < 0.8 * H:
+            regions.append(("image", x, y, x + w, y + h))
+    # keep only outermost figure frames
+    imgs = [r for r in regions if r[0] == "image"]
+    inner = {i for i, r in enumerate(imgs) for j, q in enumerate(imgs)
+             if i != j and q[1] <= r[1] + 5 and q[2] <= r[2] + 5 and q[3] >= r[3] - 5 and q[4] >= r[4] - 5 and
+             (q[3] - q[1]) * (q[4] - q[2]) >= (r[3] - r[1]) * (r[4] - r[2]) and (i > j or (q[3]-q[1])*(q[4]-q[2]) > (r[3]-r[1])*(r[4]-r[2]))}
+    regions = [r for r in regions if r[0] != "image"] + [r for i, r in enumerate(imgs) if i not in inner]
+    # tables: navy header bar, extended down through grey row separators
+    navy = (a[:, :, 0] < 60) & (a[:, :, 1] < 75) & (a[:, :, 2] > 55) & (a[:, :, 2] < 140)
+    nrows = np.where(navy[:, 300:W - 300].mean(1) > 0.6)[0]
+    grey = (np.abs(a[:, :, 0] - a[:, :, 2]) < 12) & (a[:, :, 0] > 200) & (a[:, :, 0] < 240)
+    grows = np.where(grey[:, 300:W - 300].mean(1) > 0.6)[0]
+    if len(nrows):
+        for r in np.split(nrows, np.where(np.diff(nrows) > 3)[0] + 1):
+            y0, y = r[0], r[-1]
+            while True:
+                nxt = grows[(grows > y + 2) & (grows < y + 230)]
+                if not len(nxt):
+                    break
+                y = nxt[0]
+            regions.append(("table", 290, y0, W - 290, y + 4))
+    return regions
+
+
+def ctx_for(box, regions):
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    found = [r[0] for r in regions if r[1] <= cx <= r[3] and r[2] <= cy <= r[4]]
+    for c in ("image", "narrative", "table"):
+        if c in found:
+            return c
+    return "body"
+
+
+def ocr_tsv(img_path, psm=3):
+    return _run([TESSERACT, img_path, "stdout", "--psm", str(psm), "tsv"]).stdout
+
+
+def enhance_and_ocr(page_img, box, tag):
+    """Figures get a second OCR pass: crop, upscale x2.5, invert dark themes, binarise."""
+    x0, y0, x1, y1 = [int(v) for v in box]
+    crop = page_img.crop((x0, y0, x1, y1)).convert("L")
+    arr = np.asarray(crop)
+    if arr.mean() < 128:
+        crop = ImageOps.invert(crop)
+    sc = 2.5
+    crop = crop.resize((int(crop.width * sc), int(crop.height * sc)), Image.LANCZOS)
+    crop = ImageOps.autocontrast(crop)
+    p = os.path.join(WORK, f"enh_{tag}.png")
+    crop.save(p)
+    return tsv_words(ocr_tsv(p, psm=6 if "11" in tag else 3), ox=x0, oy=y0, scale=sc)
+
+
+def extract_pdf():
+    segs, pages_meta = [], []
+    native = _run([PDFTOTEXT, PDF, "-"]).stdout
+    for i, page_path in enumerate(PAGES, 1):
+        img = Image.open(page_path)
+        regions = pdf_regions(img)
+        base = tsv_words(open(os.path.join(WORK, "tsv", f"p-{i:03d}.tsv"), encoding="utf-8").read())
+        figs = [r for r in regions if r[0] == "image"]
+        # replace words inside figures with enhanced OCR words
+        enh_words = []
+        for k, f in enumerate(figs):
+            enh_words += [dict(w, src="ocr-enhanced", fig=k) for w in enhance_and_ocr(img, f[1:], f"p{i}_f{k}")]
+        base_kept, base_fig = [], []
+        for w in base:
+            (base_fig if ctx_for(w["box"], figs) == "image" else base_kept).append(w)
+        pages_meta.append(dict(page=i, native_chars=0, ocr_words=len(base), figures=len(figs),
+                               regions=Counter(r[0] for r in regions)))
+        for src_words, method in ((base_kept, "ocr"), (base_fig, "ocr-baseline-figure"), (enh_words, "ocr-enhanced")):
+            for text, idx in group_paras(src_words):
+                c = ctx_for(idx[0][2], regions)
+                if method == "ocr-baseline-figure":
+                    c = "image"
+                segs.append(Seg(A_PDF, f"p.{i}", c, text, method, idx, page=i))
+    return segs, pages_meta, len(native.strip())
+
+
+def extract_docx():
+    segs = []
+    d = Document(DOCX)
+    for n, p in enumerate(d.paragraphs):
+        if p.text.strip():
+            segs.append(Seg(A_DOCX, f"para {n}", "body", p.text, "native"))
+    for t, tb in enumerate(d.tables):
+        for r, row in enumerate(tb.rows):
+            seen = set()
+            for c, cell in enumerate(row.cells):
+                if id(cell._tc) in seen or not cell.text.strip():
+                    continue
+                seen.add(id(cell._tc))
+                segs.append(Seg(A_DOCX, f"table {t+1} r{r+1}c{c+1}", "table", cell.text.replace("\n", " ; "), "native"))
+    for s, sec in enumerate(d.sections):
+        for part in (sec.header, sec.footer):
+            for p in part.paragraphs:
+                if p.text.strip():
+                    segs.append(Seg(A_DOCX, f"header/footer s{s}", "body", p.text, "native"))
+    cp = d.core_properties
+    for f in ("author", "last_modified_by", "title", "subject", "comments"):
+        v = getattr(cp, f)
+        if v and v.strip():
+            segs.append(Seg(A_DOCX, f"metadata:{f}", "metadata", v, "native"))
+    z = zipfile.ZipFile(DOCX)
+    for name in sorted(z.namelist()):
+        if name.startswith("word/media/") and name.endswith(".png"):
+            p = os.path.join(WORK, f"docx_{os.path.basename(name)}")
+            open(p, "wb").write(z.read(name))
+            ws = tsv_words(ocr_tsv(p))
+            for text, idx in group_paras(ws):
+                segs.append(Seg(A_DOCX, os.path.basename(name), "image", text, "ocr", idx, image=name))
+    return segs
+
+
+def extract_pptx():
+    segs = []
+    pr = Presentation(PPTX)
+    for i, s in enumerate(pr.slides, 1):
+        for sh in s.shapes:
+            if sh.has_text_frame:
+                for k, p in enumerate(sh.text_frame.paragraphs):
+                    t = "".join(r.text for r in p.runs)
+                    if t.strip():
+                        segs.append(Seg(A_PPTX, f"slide {i}", "body", t, "native"))
+            if getattr(sh, "has_table", False) and sh.has_table:
+                for r, row in enumerate(sh.table.rows):
+                    for c, cell in enumerate(row.cells):
+                        if cell.text.strip():
+                            segs.append(Seg(A_PPTX, f"slide {i} table r{r+1}c{c+1}", "table",
+                                            cell.text.replace("\n", " "), "native"))
+        if s.has_notes_slide and s.notes_slide.notes_text_frame.text.strip():
+            segs.append(Seg(A_PPTX, f"slide {i} notes", "body", s.notes_slide.notes_text_frame.text, "native"))
+    cp = pr.core_properties
+    for f in ("author", "last_modified_by", "title", "subject"):
+        v = getattr(cp, f)
+        if v and v.strip():
+            segs.append(Seg(A_PPTX, f"metadata:{f}", "metadata", v, "native"))
+    return segs
+
+
+def detect_all(segs):
+    # pass 1: strong patterns only
+    gaz_full = set()
+    for s in segs:
+        for a, b, cat, conf, rule in D.person_spans_pattern(s.text):
+            if conf >= 0.9:
+                name = re.sub(r"\s+", " ", s.text[a:b])
+                toks = name.split()
+                gaz_full.add(name)
+                gaz_full.add(f"{toks[0]} {toks[-1]}")    
+        if s.ctx == "metadata":
+            nm = re.sub(r"\[.*?\]\s*", "", s.text).strip()
+            if re.fullmatch(r"[A-Z][a-z]+ [A-Z][a-z]+", nm):
+                gaz_full.add(nm)
+    # structured name columns 
+    for s in segs:
+        if s.ctx == "table" and s.method == "native":
+            for part in re.split(r" ; |\n", s.text):
+                part = part.strip()
+                if re.fullmatch(r"[A-Z][a-z]+(?:-[A-Z][a-z]+)? [A-Z][a-z]+(?:-[A-Z][a-z]+)?", part) and \
+                        D.plausible_person(part.split()):
+                    gaz_full.add(part)
+
+    full_by_art = defaultdict(set)
+    for s in segs:
+        for n in gaz_full:
+            if n in s.text:
+                full_by_art[s.artifact].add(" ".join([n.split()[0], n.split()[-1]]))
+    gaz_first = {}
+    for art, names in full_by_art.items():
+        firsts = Counter(n.split()[0] for n in names)
+        gaz_first[art] = {f for f, c in firsts.items() if c == 1 and f not in D.NAME_STOP and len(f) > 3}
+
+    for s in segs:
+        sp = D.regex_spans(s.text) + D.person_spans_pattern(s.text) + D.gazetteer_spans(s.text, gaz_full)
+        if s.ctx in ("narrative", "body", "image", "table"):
+            sp += D.person_spans_ner(nlp, s.text, ocr=s.method.startswith("ocr"))
+        if s.ctx == "image":
+            sp += D.ocr_tolerant_spans(s.text)
+        if s.ctx == "narrative":
+            for f in gaz_first.get(s.artifact, ()):
+                for m in re.finditer(r"\b" + f + r"(?:'s)?\b", s.text):
+                    sp.append((m.start(), m.end(), "PERSON", 0.7, "first-name via gazetteer (narrative)"))
+        if s.ctx == "metadata" and not sp:
+            nm = re.sub(r"\[.*?\]\s*", "", s.text).strip()
+            if re.fullmatch(r"[A-Z][a-z]+ [A-Z][a-z]+", nm):
+                sp.append((s.text.index(nm), s.text.index(nm) + len(nm), "PERSON", 0.9, "metadata author field"))
+        s.spans = D.resolve_overlaps(sp)
+    # pass 3: every confirmed full name re-seeds the gazetteer (catches repeats in screenshots/prose)
+    extra = set()
+    for s in segs:
+        for a, b, cat, conf, rule in s.spans:
+            if cat == "PERSON":
+                toks = s.text[a:b].split()
+                if len(toks) >= 2 and not any(re.fullmatch(r"[A-Z]\.?", t) for t in toks):
+                    extra.add(" ".join(toks))
+    extra -= gaz_full
+    for s in segs:
+        add = D.gazetteer_spans(s.text, extra)
+        if add:
+            s.spans = D.resolve_overlaps(s.spans + add)
+    return gaz_full | extra
+
+class Tokens:
+    """Stable, deterministic pseudonyms shared across all artifacts."""
+    def __init__(self):
+        self.person_by_key, self.person_names, self.by_value = {}, defaultdict(set), {}
+        self.counters = Counter()
+        self.person_arts = defaultdict(set)
+
+    def person(self, name, artifact=None):
+        clean = re.sub(r"'s$", "", re.sub(r"\s+", " ", name.strip()))
+        k = D.person_key(clean)
+        toks = clean.split()
+        if len(toks) == 1:  # first name only -> resolve among persons in the same artifact
+            for key, tok in self.person_by_key.items():
+                if (artifact is None or artifact in self.person_arts[tok]) and \
+                        any(n.split()[0] == toks[0] and len(n.split()) > 1 for n in self.person_names[tok]):
+                    self.person_names[tok].add(clean)
+                    return tok
+        if k not in self.person_by_key and k:
+            from rapidfuzz.distance import Levenshtein
+            for kk in list(self.person_by_key):
+                if kk and kk[0] == k[0] and len(k[1]) > 4 and Levenshtein.distance(kk[1], k[1]) <= 2:
+                    k = kk  # OCR variant (Szewezyk ~ Szewczyk, Kudkarni ~ Kulkarni)
+                    break
+        if k not in self.person_by_key:
+            self.counters["PERSON"] += 1
+            self.person_by_key[k] = f"PERSON-{self.counters['PERSON']:03d}"
+        tok = self.person_by_key[k]
+        self.person_names[tok].add(clean)
+        if artifact:
+            self.person_arts[tok].add(artifact)
+        return tok
+
+    def value(self, cat, val):
+        norm = re.sub(r"[\s().-]", "", val.lower())
+        if cat == "EMAIL":
+            k = D.email_key(val)
+            if k and k in self.person_by_key:
+                return self.person_by_key[k].replace("PERSON", "EMAIL")
+        if (cat, norm) not in self.by_value:
+            self.counters[cat] += 1
+            self.by_value[(cat, norm)] = f"{cat}-{self.counters[cat]:03d}"
+        return self.by_value[(cat, norm)]
+
+
+def build_inventory(segs):
+    T = Tokens()
+    rows = []
+    # persons first (full names before partial) so emails/initials link to them
+    order = sorted([(s, sp) for s in segs for sp in s.spans if sp[2] == "PERSON"],
+                   key=lambda x: -len(x[0].text[x[1][0]:x[1][1]].split()))
+    for s, sp in order:
+        if len(s.text[sp[0]:sp[1]].split()) > 1:
+            T.person(s.text[sp[0]:sp[1]], s.artifact)
+    for s in segs:
+        for a, b, cat, conf, rule in s.spans:
+            val = re.sub(r"\s+", " ", s.text[a:b]).strip()
+            tok = T.person(val, s.artifact) if cat == "PERSON" else T.value(cat, val)
+            rows.append(dict(artifact=s.artifact, location=s.loc, context=s.ctx, method=s.method,
+                             category=cat, tier=D.TIER.get(cat, "Medium"), value=val, token=tok,
+                             confidence=conf, rule=rule,
+                             snippet=s.text[max(0, a - 40):b + 40].replace("\n", " ")))
+    return rows, T
+
+
+def mask_text(text, spans, toktext):
+    out, last = "", 0
+    for a, b, cat, conf, rule in spans:
+        out += text[last:a] + "[" + toktext(text[a:b], cat) + "]"
+        last = b
+    return out + text[last:]
+
+
+SHORT = {"PERSON": "PER", "EMPLOYEE_ID": "EID", "PHONE": "TEL", "EMAIL": "EML", "HOME_ADDRESS": "ADR",
+         "PASSPORT": "PPT", "PAN_IN": "PAN", "SSN_PARTIAL": "SSN4", "CARD_PARTIAL": "CRD4", "CARD_NUMBER": "CRD",
+         "ACCOUNT_PARTIAL": "ACC4", "IP_ADDRESS": "IP", "CREDENTIAL_ID": "CRED", "PHOTO": "PHOTO"}
+
+
+def short(tok):
+    pre, num = tok.rsplit("-", 1)
+    return f"{SHORT.get(pre, pre)}-{num}"
+
+
+def mask_pdf(segs, T, conf_min=0.6):
+    by_page = defaultdict(list)
+    for s in segs:
+        if s.artifact == A_PDF:
+            by_page[s.page].append(s)
+    paths = []
+    for i, page_path in enumerate(PAGES, 1):
+        img = Image.open(page_path).convert("RGB")
+        dr = ImageDraw.Draw(img)
+        for s in by_page[i]:
+            for a, b, cat, conf, rule in s.spans:
+                if conf < conf_min:
+                    continue
+                val = re.sub(r"\s+", " ", s.text[a:b]).strip()
+                tok = T.person(val, A_PDF) if cat == "PERSON" else T.value(cat, val)
+                tok = short(tok)
+                boxes = [w[2] for w in s.words if not (w[1] <= a or w[0] >= b)]
+                # group boxes by line (similar y)
+                lines = defaultdict(list)
+                for bx in boxes:
+                    lines[round(bx[1] / 25)].append(bx)
+                for ln in lines.values():
+                    x0 = min(b_[0] for b_ in ln) - 3; y0 = min(b_[1] for b_ in ln) - 3
+                    x1 = max(b_[2] for b_ in ln) + 3; y1 = max(b_[3] for b_ in ln) + 3
+                    dr.rectangle([x0, y0, x1, y1], fill=(20, 30, 50))
+                    fs = 22
+                    while fs > 9:
+                        f2 = get_font(fs)
+                        if dr.textlength(tok, font=f2) <= (x1 - x0 - 6) and fs <= (y1 - y0):
+                            break
+                        fs -= 2
+                    f2 = get_font(fs)
+                    dr.text((x0 + 3, y0 + max(0, (y1 - y0 - fs) / 2) - 1), tok, fill=(240, 200, 90), font=f2)
+        # fail-safe: OCR recall inside figures is ~56%, so any figure with a finding is
+        # redacted whole (layout kept, label lists what was detected)
+        page_img = Image.open(page_path)
+        figs = [r for r in pdf_regions(page_img) if r[0] == "image"]
+        for f in figs:
+            cats = sorted({sp[2] for s in by_page[i] if s.ctx == "image" for sp in s.spans
+                           for w in s.words[:1] if f[1] <= w[2][0] <= f[3] and f[2] <= w[2][1] <= f[4]})
+            if cats:
+                dr.rectangle([f[1], f[2], f[3], f[4]], fill=(20, 30, 50))
+                fl = get_font(40); fs_ = get_font(30)
+                dr.text((f[1] + 40, f[2] + 40), "FIGURE REDACTED - image contains personal data", fill=(240, 200, 90), font=fl)
+                dr.text((f[1] + 40, f[2] + 100), "Detected: " + ", ".join(cats), fill=(220, 225, 235), font=fs_)
+                dr.text((f[1] + 40, f[2] + 145), "Original held in restricted store; see pii_inventory.csv", fill=(220, 225, 235), font=fs_)
+        p = os.path.join(WORK, f"masked_p{i:03d}.jpg")
+        img.save(p, quality=72, optimize=True)
+        paths.append(p)
+    import img2pdf
+    out = os.path.join(OUT, stem(PDF) + "_MASKED.pdf")
+    w0, h0 = Image.open(PAGES[0]).size          # rendered at 300 dpi -> keep original page size
+    with open(out, "wb") as f:
+        f.write(img2pdf.convert(paths, layout_fun=img2pdf.get_layout_fun((img2pdf.in_to_pt(w0 / 300), img2pdf.in_to_pt(h0 / 300)))))
+    return out
+
+
+def _tok(T):
+    return lambda v, cat: short(T.person(re.sub(r"\s+", " ", v).strip()) if cat == "PERSON" else T.value(cat, re.sub(r"\s+", " ", v).strip()))
+
+
+def mask_paragraph(p, T):
+    text = "".join(r.text for r in p.runs)
+    if not text.strip():
+        return 0
+    sp = [s for s in SPAN_CACHE.get(text, [])]
+    if not sp:
+        return 0
+    new = mask_text(text, sp, _tok(T))
+    p.runs[0].text = new
+    for r in p.runs[1:]:
+        r.text = ""
+    return len(sp)
+
+
+SPAN_CACHE = {}
+
+
+def mask_docx(segs, T):
+    d = Document(DOCX)
+    n = 0
+    for p in d.paragraphs:
+        n += mask_paragraph(p, T)
+    for tb in d.tables:
+        for row in tb.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    n += mask_paragraph(p, T)
+    cp = d.core_properties
+    for f in ("author", "last_modified_by"):
+        v = getattr(cp, f)
+        if v:
+            nm = re.sub(r"\[.*?\]\s*", "", v).strip()
+            setattr(cp, f, "[" + short(T.person(nm)) + "]")
+    tmp = os.path.join(WORK, "docx_masked_tmp.docx")
+    d.save(tmp)
+    # redact screenshots
+    red = {}
+    for s in segs:
+        if s.artifact == A_DOCX and s.image and s.spans:
+            red.setdefault(s.image, []).append(s)
+    out = os.path.join(OUT, stem(DOCX) + "_MASKED.docx")
+    zin, zout = zipfile.ZipFile(tmp), zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED)
+    for item in zin.infolist():
+        data = zin.read(item.filename)
+        if item.filename in red:
+            img = Image.open(io.BytesIO(data)).convert("RGB")
+            dr = ImageDraw.Draw(img)
+            for s in red[item.filename]:
+                for a, b, *_ in s.spans:
+                    for w in s.words:
+                        if not (w[1] <= a or w[0] >= b):
+                            dr.rectangle([w[2][0] - 2, w[2][1] - 2, w[2][2] + 2, w[2][3] + 2], fill=(20, 30, 50))
+            buf = io.BytesIO(); img.save(buf, "PNG"); data = buf.getvalue()
+        zout.writestr(item, data)
+    zout.close()
+    zin.close()
+    return out, n
+
+
+def mask_pptx(T):
+    pr = Presentation(PPTX)
+    n = 0
+    for s in pr.slides:
+        for sh in s.shapes:
+            if sh.has_text_frame:
+                for p in sh.text_frame.paragraphs:
+                    n += mask_paragraph(p, T)
+            if getattr(sh, "has_table", False) and sh.has_table:
+                for row in sh.table.rows:
+                    for cell in row.cells:
+                        for p in cell.text_frame.paragraphs:
+                            n += mask_paragraph(p, T)
+    cp = pr.core_properties
+    for f in ("author", "last_modified_by"):
+        v = getattr(cp, f)
+        if v:
+            setattr(cp, f, "[" + short(T.person(re.sub(r"\[.*?\]\s*", "", v).strip())) + "]")
+    out = os.path.join(OUT, stem(PPTX) + "_MASKED.pptx")
+    pr.save(out)
+    return out, n
+
+
+if __name__ == "__main__":
+    import pickle
+    print("Stage 1/4  extracting text (first run takes several minutes: OCR of every page)…", flush=True)
+    PAGES = render_pdf_pages()
+    cache = os.path.join(WORK, "extract.pkl")
+    if os.path.exists(cache):
+        pdf_segs, pages_meta, pdf_native_chars, docx_segs, pptx_segs = pickle.load(open(cache, "rb"))
+    else:
+        pdf_segs, pages_meta, pdf_native_chars = extract_pdf()
+        print("  reading Word file and its screenshots…", flush=True)
+        docx_segs = extract_docx()
+        pptx_segs = extract_pptx()
+        pickle.dump((pdf_segs, pages_meta, pdf_native_chars, docx_segs, pptx_segs), open(cache, "wb"))
+    with open(os.path.join(WORK, "all_text.txt"), "w", encoding="utf-8") as f_:
+        f_.write("\n".join(s.text for s in pdf_segs + docx_segs + pptx_segs))
+    segs = pdf_segs + docx_segs + pptx_segs
+    print("Stage 2/4  detecting PII…", flush=True)
+    gaz = detect_all(segs)
+
+    # for metrics
+    inv_segs = [s for s in segs if s.method != "ocr-baseline-figure"]
+    rows, T = build_inventory(inv_segs)
+    base_fig_rows = [(s.page, sp[2], re.sub(r"\s+", " ", s.text[sp[0]:sp[1]]).strip())
+                     for s in segs if s.method == "ocr-baseline-figure" for sp in s.spans]
+
+    for s in docx_segs + pptx_segs:
+        if s.method == "native" and s.ctx != "metadata":
+            SPAN_CACHE[s.text] = s.spans
+    # docx/pptx paragraph text may differ from cell text joined with ' ; ' -> re-detect per paragraph
+    def para_spans(text):
+        sp = D.regex_spans(text) + D.person_spans_pattern(text) + D.gazetteer_spans(text, gaz) + D.person_spans_ner(nlp, text)
+        return D.resolve_overlaps(sp)
+    for doc_path, kind in ((DOCX, "docx"), (PPTX, "pptx")):
+        if kind == "docx":
+            d = Document(doc_path)
+            paras = list(d.paragraphs) + [p for tb in d.tables for row in tb.rows for c in row.cells for p in c.paragraphs]
+        else:
+            pr = Presentation(doc_path)
+            paras = []
+            for s in pr.slides:
+                for sh in s.shapes:
+                    if sh.has_text_frame:
+                        paras += list(sh.text_frame.paragraphs)
+                    if getattr(sh, "has_table", False) and sh.has_table:
+                        paras += [p for row in sh.table.rows for c in row.cells for p in c.text_frame.paragraphs]
+        for p in paras:
+            t = "".join(r.text for r in p.runs)
+            if t.strip() and t not in SPAN_CACHE:
+                SPAN_CACHE[t] = para_spans(t)
+
+    print("Stage 3/4  writing masked copies…", flush=True)
+    pdf_out = mask_pdf(inv_segs, T)
+    docx_out, nd = mask_docx(inv_segs, T)
+    pptx_out, np_ = mask_pptx(T)
+
+    with open(os.path.join(OUT, "pii_inventory.csv"), "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader(); w.writerows(rows)
+    xref = []
+    for tok, names in sorted(T.person_names.items()):
+        arts = sorted({r["artifact"] for r in rows if r["token"] in (tok, tok.replace("PERSON", "EMAIL"))})
+        xref.append(dict(token=tok, names=" | ".join(sorted(names)), artifacts=" + ".join(arts),
+                         mentions=sum(1 for r in rows if r["token"] == tok)))
+    with open(os.path.join(OUT, "person_token_map.csv"), "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=list(xref[0].keys())); w.writeheader(); w.writerows(xref)
+    json.dump(dict(pages=pages_meta, pdf_native_chars=pdf_native_chars,
+                   base_fig=base_fig_rows, masked=[pdf_out, docx_out, pptx_out]),
+              open(os.path.join(OUT, "run_meta.json"), "w", encoding="utf-8"), default=str, indent=1)
+    print("Stage 4/4  computing metrics…", flush=True)
+    import metrics
+    metrics.run(OUT, os.path.join(WORK, "all_text.txt"))
+    print(f"\nDone: {len(rows)} findings, {len(xref)} people. Results in: {OUT}")
