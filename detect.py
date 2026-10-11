@@ -108,7 +108,8 @@ def regex_spans(text):
         else:
             add(m, "HOME_ADDRESS", 0.6, "street-pattern (review)")
 
-    phone = r"(?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)\s?)?\d{1,5}(?:[\s.-]\d{2,5}){1,3}"
+    # {0,3} (was {1,3}) so "+1 (555) 0139" - area code then a single group - still matches; gated by 'strong' below
+    phone = r"(?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)\s?)?\d{1,5}(?:[\s.-]\d{2,5}){0,3}"
     for m in re.finditer(phone, text):
         s = m.group().strip()
         d = re.sub(r"\D", "", s)
@@ -227,9 +228,24 @@ def person_spans_pattern(text):
             out.append((m.start(1), m.end(1), "PERSON", 0.95, "name anchored by employee-id"))
     for m in re.finditer(NAME_INIT, text):
         sur = m.group().split()[-1].split(".")[-1]
-        if sur in NAME_STOP or len(sur) < 3 or _zf(sur.lower().replace("-", ""), "en") >= 3.5:
+        # the leading initial is itself a strong name signal, so accept even a common-word surname
+        # (e.g. "H. Park") - only reject stop-words and 1-2 char fragments
+        if sur in NAME_STOP or len(sur) < 3:
             continue
         out.append((m.start(), m.end(), "PERSON", 0.7, "initial+surname pattern"))
+    # period-less initial cluster + surname (e.g. "KC Burney", "DK Koran"); surname must be rare to avoid "AI Adoption"
+    for m in re.finditer(r"\b([A-Z]{2,3})\s+([A-Z][a-z]{2,}(?:-[A-Z][a-z]+)?)\b", text):
+        sur = m.group(2)
+        if sur not in NAME_STOP and _zf(sur.lower().replace("-", ""), "en") < 4.0:
+            out.append((m.start(), m.end(), "PERSON", 0.7, "initials-cluster+surname"))
+    # plain First Last (e.g. "Erik Hansen", "Mark Read", "Skylar Damiano")
+    for m in re.finditer(rf"\b({NAME_TOKEN})\s+({NAME_TOKEN})\b", text):
+        first, sur = m.group(1), m.group(2)
+        if any(t in NAME_STOP for t in re.split(r"-", first) + re.split(r"-", sur)):
+            continue  # reject if any hyphen part is a stop-word, e.g. "Third-Party" -> "Third"
+        if first.lower() in FIRST_NAMES or (_zf(first.lower().replace("-", ""), "en") < 4.0
+                                            and _zf(sur.lower().replace("-", ""), "en") < 4.0):
+            out.append((m.start(1), m.end(2), "PERSON", 0.7, "first-last name"))
     return out
 
 

@@ -343,7 +343,7 @@ def extract_docx():
             segs.append(Seg(A_DOCX, f"metadata:{f}", "metadata", v, "native"))
     z = zipfile.ZipFile(DOCX)
     for name in sorted(z.namelist()):
-        if name.startswith("word/media/") and name.endswith(".png"):
+        if name.startswith("word/media/") and name.lower().endswith((".png", ".jpg", ".jpeg")):
             p = os.path.join(WORK, f"docx_{os.path.basename(name)}")
             open(p, "wb").write(z.read(name))
             ws = tsv_words(ocr_tsv(p))
@@ -556,30 +556,25 @@ def mask_pdf(segs, T, conf_min=0.6):
                         fs -= 2
                     f2 = get_font(fs)
                     dr.text((x0 + 3, y0 + max(0, (y1 - y0 - fs) / 2) - 1), tok, fill=(240, 200, 90), font=f2)
-        # fail-safe: OCR recall inside figures is ~56%, so a figure is redacted whole when it either
-        # (a) has a detected finding, or (b) is unreadable - too few OCR words for its size to vet it.
-        # (b) is fail-closed: a sparse chart and an unreadable PII screenshot look alike to OCR, so we
-        # redact both rather than risk passing undetected PII downstream (brief: no unidentified instances).
+        # Fail closed: every embedded figure is sealed whole. OCR recall inside figures is unreliable -
+        # a name or ID can be missed (e.g. the identity screenshot on p9), so we never pass a figure
+        # through on the strength of detection alone. Charts are sacrificed: the correct trade for a PII
+        # gate (brief: no unidentified instances passed downstream).
         page_img = Image.open(page_path)
         figs = [r for r in pdf_regions(page_img) if r[0] == "image"]
         for f in figs:
-            inside = [w for s in by_page[i] if s.ctx == "image" for w in s.words
-                      if f[1] <= w[2][0] <= f[3] and f[2] <= w[2][1] <= f[4]]
             cats = sorted({sp[2] for s in by_page[i] if s.ctx == "image" for sp in s.spans
                            for w in s.words[:1] if f[1] <= w[2][0] <= f[3] and f[2] <= w[2][1] <= f[4]})
-            area_in2 = (f[3] - f[1]) * (f[4] - f[2]) / (300.0 * 300.0)   # page rendered at 300 dpi
-            unreadable = len(inside) < 1.5 * area_in2
-            if cats or unreadable:
-                redactions.append(dict(page=i, reason=("pii" if cats else "unreadable"), detected=cats,
-                                       box=[int(f[1]), int(f[2]), int(f[3]), int(f[4])]))
-                dr.rectangle([f[1], f[2], f[3], f[4]], fill=(20, 30, 50))
-                fl = get_font(40); fs_ = get_font(30)
-                head = "FIGURE REDACTED - image contains personal data" if cats else \
-                       "FIGURE REDACTED - unreadable image, redacted as a precaution"
-                detail = ", ".join(cats) if cats else "OCR coverage too low to vet contents"
-                dr.text((f[1] + 40, f[2] + 40), head, fill=(240, 200, 90), font=fl)
-                dr.text((f[1] + 40, f[2] + 100), "Detected: " + detail, fill=(220, 225, 235), font=fs_)
-                dr.text((f[1] + 40, f[2] + 145), "Original held in restricted store; see pii_inventory.csv", fill=(220, 225, 235), font=fs_)
+            redactions.append(dict(page=i, reason=("pii" if cats else "precaution"), detected=cats,
+                                   box=[int(f[1]), int(f[2]), int(f[3]), int(f[4])]))
+            dr.rectangle([f[1], f[2], f[3], f[4]], fill=(20, 30, 50))
+            fl = get_font(40); fs_ = get_font(30)
+            head = "FIGURE REDACTED - image contains personal data" if cats else \
+                   "FIGURE REDACTED - sealed, contents not passed to the LLM"
+            detail = ", ".join(cats) if cats else "all embedded figures are sealed by policy"
+            dr.text((f[1] + 40, f[2] + 40), head, fill=(240, 200, 90), font=fl)
+            dr.text((f[1] + 40, f[2] + 100), "Detected: " + detail, fill=(220, 225, 235), font=fs_)
+            dr.text((f[1] + 40, f[2] + 145), "Original held in restricted store; see pii_inventory.csv", fill=(220, 225, 235), font=fs_)
         p = os.path.join(WORK, f"masked_p{i:03d}.jpg")
         img.save(p, quality=72, optimize=True)
         paths.append(p)
@@ -630,28 +625,55 @@ def mask_docx(segs, T):
             setattr(cp, f, "[" + short(T.person(nm)) + "]")
     tmp = os.path.join(WORK, "docx_masked_tmp.docx")
     d.save(tmp)
-    # redact screenshots
-    red = {}
-    for s in segs:
-        if s.artifact == A_DOCX and s.image and s.spans:
-            red.setdefault(s.image, []).append(s)
+    # Fail closed: seal every embedded image that OCR found text in (i.e. a screenshot) whole, not just the
+    # detected word boxes - OCR can miss a name inside the shot (e.g. the user-management screenshots).
+    seal = {s.image for s in segs if s.artifact == A_DOCX and s.image and s.text.strip()}
     out = os.path.join(OUT, stem(DOCX) + "_MASKED.docx")
     zin, zout = zipfile.ZipFile(tmp), zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED)
     for item in zin.infolist():
         data = zin.read(item.filename)
-        if item.filename in red:
+        if item.filename in seal:
             img = Image.open(io.BytesIO(data)).convert("RGB")
             dr = ImageDraw.Draw(img)
-            for s in red[item.filename]:
-                for a, b, *_ in s.spans:
-                    for w in s.words:
-                        if not (w[1] <= a or w[0] >= b):
-                            dr.rectangle([w[2][0] - 2, w[2][1] - 2, w[2][2] + 2, w[2][3] + 2], fill=(20, 30, 50))
-            buf = io.BytesIO(); img.save(buf, "PNG"); data = buf.getvalue()
+            dr.rectangle([0, 0, img.width, img.height], fill=(20, 30, 50))
+            try:
+                dr.text((15, 15), "IMAGE REDACTED - embedded screenshot sealed, not passed to the LLM",
+                        fill=(240, 200, 90), font=get_font(max(12, img.width // 45)))
+            except Exception:
+                pass
+            fmt = "JPEG" if item.filename.lower().endswith((".jpg", ".jpeg")) else "PNG"
+            buf = io.BytesIO(); img.save(buf, fmt); data = buf.getvalue()
         zout.writestr(item, data)
     zout.close()
     zin.close()
     return out, n
+
+
+def leakage_gate(rows):
+    """Independent verification: re-open the masked DOCX/PPTX and confirm no detected PII value
+    survives in the text layer. Catches masking bugs (detected but not removed), not detection misses."""
+    texts = {}
+    d = Document(os.path.join(OUT, stem(DOCX) + "_MASKED.docx"))
+    parts = [p.text for p in d.paragraphs] + [c.text for tb in d.tables for row in tb.rows for c in row.cells]
+    texts[A_DOCX] = "\n".join(parts)
+    pr = Presentation(os.path.join(OUT, stem(PPTX) + "_MASKED.pptx"))
+    parts = []
+    for s in pr.slides:
+        for sh in s.shapes:
+            if sh.has_text_frame:
+                parts.append(sh.text_frame.text)
+            if getattr(sh, "has_table", False) and sh.has_table:
+                parts += [c.text for row in sh.table.rows for c in row.cells]
+        if s.has_notes_slide:
+            parts.append(s.notes_slide.notes_text_frame.text)
+    texts[A_PPTX] = "\n".join(parts)
+    survivors = []
+    for r in rows:
+        t = texts.get(r["artifact"])
+        if t and len(r["value"]) >= 5 and r["value"] in t:   # >=5 chars: skip short partials that collide with words
+            survivors.append(dict(artifact=r["artifact"], category=r["category"],
+                                  value=r["value"], location=r["location"]))
+    return survivors
 
 
 def mask_pptx(T):
@@ -667,6 +689,9 @@ def mask_pptx(T):
                     for cell in row.cells:
                         for p in cell.text_frame.paragraphs:
                             n += mask_paragraph(p, T)
+        if s.has_notes_slide:                       # speaker notes can carry PII too
+            for p in s.notes_slide.notes_text_frame.paragraphs:
+                n += mask_paragraph(p, T)
     cp = pr.core_properties
     for f in ("author", "last_modified_by"):
         v = getattr(cp, f)
@@ -722,6 +747,8 @@ if __name__ == "__main__":
                         paras += list(sh.text_frame.paragraphs)
                     if getattr(sh, "has_table", False) and sh.has_table:
                         paras += [p for row in sh.table.rows for c in row.cells for p in c.text_frame.paragraphs]
+                if s.has_notes_slide:
+                    paras += list(s.notes_slide.notes_text_frame.paragraphs)
         for p in paras:
             t = "".join(r.text for r in p.runs)
             if t.strip() and t not in SPAN_CACHE:
@@ -745,8 +772,15 @@ if __name__ == "__main__":
     text_chars = Counter()
     for s in inv_segs:
         text_chars[s.artifact] += len(s.text)
+    residual_leaks = leakage_gate(rows)
+    if residual_leaks:
+        print(f"  !! LEAKAGE GATE: {len(residual_leaks)} detected PII value(s) still present in masked text:", flush=True)
+        for L in residual_leaks[:10]:
+            print(f"       {L['artifact']} | {L['category']} | {L['value']!r} | {L['location']}", flush=True)
+    else:
+        print("  leakage gate: 0 detected PII values survive in masked DOCX/PPTX text", flush=True)
     json.dump(dict(pages=pages_meta, pdf_native_chars=pdf_native_chars, text_chars=text_chars,
-                   figure_redactions=fig_redactions,
+                   figure_redactions=fig_redactions, residual_leaks=residual_leaks,
                    base_fig=base_fig_rows, masked=[pdf_out, docx_out, pptx_out]),
               open(os.path.join(OUT, "run_meta.json"), "w", encoding="utf-8"), default=str, indent=1)
     print("Stage 4/4  computing metrics…", flush=True)
