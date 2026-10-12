@@ -312,7 +312,16 @@ def enhance_and_ocr(page_img, box, tag):
     crop = ImageOps.autocontrast(crop)
     p = os.path.join(WORK, f"enh_{tag}.png")
     crop.save(p)
-    return tsv_words(ocr_tsv(p, psm=6 if "11" in tag else 3), ox=x0, oy=y0, scale=sc)
+    # Union two layout modes: psm 3 (auto) reads clean columns but DROPS regions next to barcodes/noise
+    # (e.g. the DOB line under the p28 ID-card barcode); psm 6 (uniform block) recovers those. Offset the
+    # second pass's block ids so group_paras keeps the passes in separate paragraphs; dupes dedup downstream.
+    psms = (6,) if "11" in tag else (3, 6)
+    words = []
+    for pi, ps in enumerate(psms):
+        for w in tsv_words(ocr_tsv(p, psm=ps), ox=x0, oy=y0, scale=sc):
+            w["b"] += pi * 1000
+            words.append(w)
+    return words
 
 
 def extract_pdf():

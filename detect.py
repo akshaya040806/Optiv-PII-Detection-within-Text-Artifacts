@@ -157,6 +157,7 @@ Incorporated Ltd LLC LLP Inc GmbH Limited Company Companies Insurance Fintech La
 Questionnaire Diligence Due Template Templates Attribute Settings User Groups Users Admin Live Launch Stage Rules Rule
 Revenue Marketing International Service Providers Legal Finance Procurement Quality Contracting Systems Integration
 New Third Party Default Local Prospective Employees Doing Platinum Lane Court Crescent
+Effective Ineffective Elective Partially Moderate Elevated
 Street Apartment Unauthorised Payment Processing Sanctions Records Customer Key Person Residual Rating Owner
 Contact Status Target Signature Date Attested Challenger Received Scope Cycle Page Form Severity Issue Incident
 Dir VP CRO CEO CFO CIO Chair Cnar Char Challenged Cloud General Counsel Reviewer Peer Client Confidential""".split())
