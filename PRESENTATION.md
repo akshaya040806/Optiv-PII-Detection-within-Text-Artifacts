@@ -69,8 +69,10 @@ preserved, and full traceability.
 3. **Independent verification** — don't trust the redactor; re-read the output and prove it's clean.
 4. **Traceability** — every finding carries its rule and confidence.
 
-**Current numbers:** 999 distinct PII findings · 131 unique people · 67 figures/tables sealed ·
-**0 residual leaks** (independently verified across all three formats).
+**Current numbers:** 1002 distinct PII findings · 134 unique people · 67 figures/tables sealed ·
+**0 residual leaks** (independently verified across all three formats). Proven to **generalize**
+to an unseen document, and guarded by a **26-check self-test suite** (`test_detect.py`,
+`test_generalize.py`).
 
 ---
 
@@ -167,8 +169,13 @@ _(open `pii_inventory.csv`)_ And here's the audit trail — every single finding
 location, category, sensitivity tier, and the rule that caught it. Fully traceable."
 
 ### [10:00] Reliable outcomes & honesty — Presenter 3
-"The numbers: **999 distinct PII items** found across the three files, **131 unique people**,
+"The numbers: **1002 distinct PII items** found across the three files, **134 unique people**,
 **67 figures and tables sealed**, and — verified independently — **zero residual leaks.**
+
+And it **generalizes**: we ran it on a document it had never seen, with new names, a new company,
+and new cities — it caught all the new PII and correctly ignored the new company and cities,
+*without any code changes*. The whole thing is guarded by a **self-test suite** so a future edit
+can't silently reintroduce a leak.
 
 We'll also be honest about limits, because a security review should be. Six embedded **vector
 images we can't OCR** are *flagged for manual review* rather than silently passed. And text-based
