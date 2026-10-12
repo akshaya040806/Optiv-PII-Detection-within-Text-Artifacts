@@ -103,7 +103,7 @@ select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; f
 .chart { display: flex; flex-direction: column; gap: 8px; }
 .bar-row { display: grid; grid-template-columns: 130px 1fr 44px; align-items: center; gap: 10px; font-size: 13px; }
 .bar-track { background: #eef1f6; border-radius: 6px; height: 16px; overflow: hidden; }
-.bar-fill { background: linear-gradient(90deg, var(--navy-2), var(--orange)); height: 100%; border-radius: 6px; }
+.bar-fill { display: block; background: linear-gradient(90deg, var(--navy-2), var(--orange)); height: 100%; border-radius: 6px; }
 .bar-val { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .tiers { display: flex; gap: 10px; margin-top: 16px; }
 .tier { flex: 1; text-align: center; border-radius: 8px; padding: 10px; font-size: 12.5px; }
