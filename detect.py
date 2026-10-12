@@ -144,16 +144,17 @@ def regex_spans(text):
     return out
 
 
-NAME_STOP = set("""Group Risk Committee Board Chief Officer Policy Management Financial Cadence Audit Asset Liability
+# Generic, domain-reusable stop-words only. Company names, vendor names, cities and countries are NOT
+# hard-coded here (that overfits to one corpus); they are suppressed dynamically via spaCy ORG/GPE/LOC
+# entities built per document (see person_and_org_spans + detect_all).
+NAME_STOP = set("""Group Risk Committee Board Chief Officer Policy Management Financial Audit Asset Liability
 Executive Director Committee Consumer Banking Investment Capital Markets Global Technology Services Operational Credit
 Conduct Compliance Product Approval Divisional First Second Third Line Appendix Section Figure Table Version Internal
 Head Privacy Data Protection Security Information Vice President Enterprise Framework Speak Up Remuneration Business
-Federal Reserve Prudential Regulation Authority Conduct Standards Staffing Analytics Screening Integrity Halloran Pike
-Meridian Northwind Veritrace AegisGRC SecureGRC OneTrust Ironclad Optiv Torii Vendor Partners Partner Workflow Tier
+Regulation Authority Conduct Standards Staffing Analytics Screening Integrity Vendor Partners Partner Workflow Tier
 Questionnaire Diligence Due Template Templates Attribute Settings User Groups Users Admin Live Launch Stage Rules Rule
 Revenue Marketing International Service Providers Legal Finance Procurement Quality Contracting Systems Integration
-New Third Party Default Local Prospective Employees Doing Mumbai Bengaluru Chennai Manila Krakow London Singapore
-Hong Kong Jersey City Hoboken Coral Gables Miami United States Kingdom India Europe Platinum Lane Court Crescent
+New Third Party Default Local Prospective Employees Doing Platinum Lane Court Crescent
 Street Apartment Unauthorised Payment Processing Sanctions Records Customer Key Person Residual Rating Owner
 Contact Status Target Signature Date Attested Challenger Received Scope Cycle Page Form Severity Issue Incident
 Dir VP CRO CEO CFO CIO Chair Cnar Char Challenged Cloud General Counsel Reviewer Peer Client Confidential""".split())
@@ -205,9 +206,8 @@ def plausible_person(toks, ocr=False):
     return any(_zf(t.lower().replace("-", ""), "en") < 3.0 for t in words)
 
 
-def person_spans_ner(nlp, text, ocr=False):
+def _persons_from_ents(doc, ocr=False):
     out = []
-    doc = nlp(text)
     for e in doc.ents:
         if e.label_ != "PERSON":
             continue
@@ -221,6 +221,10 @@ def person_spans_ner(nlp, text, ocr=False):
             continue
         out.append((e.start_char + parts[0][0], e.start_char + parts[-1][1], "PERSON", 0.7, "spacy-ner (filtered)"))
     return out
+
+
+def person_spans_ner(nlp, text, ocr=False):
+    return _persons_from_ents(nlp(text), ocr)
 
 
 NAME_TOKEN = r"[A-Z][a-z]+(?:-[A-Z][a-z]+)?"

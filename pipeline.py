@@ -395,6 +395,9 @@ def extract_pptx():
 
 
 def detect_all(segs):
+    # De-overfit note: company/vendor/city names are NO LONGER hard-coded in NAME_STOP. Multi-word orgs are
+    # still rejected by generic suffix stop-words (Partners, Services, Group...). A handful of bare two-word
+    # place names may now be masked as PERSON - harmless over-masking, the safe direction for a redaction gate.
     # pass 1: strong patterns only
     gaz_full = set()
     for s in segs:
@@ -403,7 +406,7 @@ def detect_all(segs):
                 name = re.sub(r"\s+", " ", s.text[a:b])
                 toks = name.split()
                 gaz_full.add(name)
-                gaz_full.add(f"{toks[0]} {toks[-1]}")    
+                gaz_full.add(f"{toks[0]} {toks[-1]}")
         if s.ctx == "metadata":
             nm = re.sub(r"\[.*?\]\s*", "", s.text).strip()
             if re.fullmatch(r"[A-Z][a-z]+ [A-Z][a-z]+", nm):
