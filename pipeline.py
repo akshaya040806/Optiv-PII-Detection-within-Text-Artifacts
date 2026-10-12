@@ -23,7 +23,16 @@ ap.add_argument("--no-gui", action="store_true",
                  help="never pop up file-picker windows; fail instead if --pdf/--docx/--pptx are missing")
 ap.add_argument("--ner-model", default="en_core_web_sm",
                  help="spaCy model for name NER; use en_core_web_trf (if installed) for stronger recall/generalization")
+ap.add_argument("--file", default=None,
+                 help="a single input file of any supported type (.pdf/.docx/.pptx); routed automatically by extension")
 ARGS = ap.parse_args()
+
+if ARGS.file:   # route a single generic file to the right slot by its extension
+    _ext = os.path.splitext(ARGS.file)[1].lower()
+    _slot = {".pdf": "pdf", ".docx": "docx", ".pptx": "pptx"}.get(_ext)
+    if not _slot:
+        sys.exit(f"--file must be a .pdf, .docx or .pptx (got {_ext or 'no extension'})")
+    setattr(ARGS, _slot, getattr(ARGS, _slot) or ARGS.file)
 
 
 def _pick_file(title, filetypes):
@@ -59,29 +68,34 @@ def _pick_folder(title):
     return path or "pii_output"
 
 
-if ARGS.no_gui and not (ARGS.pdf and ARGS.docx and ARGS.pptx):
-    sys.exit("--no-gui was set but --pdf/--docx/--pptx were not all given. See README.md.")
-
-if not ARGS.pdf:
-    print("No --pdf given: opening a file-picker window for the Risk Management Policy PDF…", flush=True)
-    ARGS.pdf = _pick_file("Select the Group Risk Management Policy PDF", [("PDF files", "*.pdf")])
-if not ARGS.docx:
-    print("No --docx given: opening a file-picker window for the TPRM Training Word file…", flush=True)
-    ARGS.docx = _pick_file("Select the TPRM Training .docx", [("Word documents", "*.docx")])
-if not ARGS.pptx:
-    print("No --pptx given: opening a file-picker window for the Organizational Pack PowerPoint…", flush=True)
-    ARGS.pptx = _pick_file("Select the Organizational Pack .pptx", [("PowerPoint files", "*.pptx")])
+# At least one input file is required (any subset of the three is fine). If none given and a
+# display is available, open one picker for any supported type.
+if not (ARGS.pdf or ARGS.docx or ARGS.pptx):
+    if ARGS.no_gui:
+        sys.exit("No input given. Pass --file <a .pdf/.docx/.pptx>, or any of --pdf/--docx/--pptx. See README.md.")
+    print("No input given: opening a file-picker (pick a .pdf, .docx or .pptx)…", flush=True)
+    picked = _pick_file("Select a PDF, Word or PowerPoint file",
+                        [("Documents", "*.pdf *.docx *.pptx"), ("All files", "*")])
+    slot = {".pdf": "pdf", ".docx": "docx", ".pptx": "pptx"}.get(os.path.splitext(picked)[1].lower())
+    if not slot:
+        sys.exit("Unsupported file type: " + os.path.splitext(picked)[1])
+    setattr(ARGS, slot, picked)
 if not ARGS.out:
-    print("No --out given: opening a folder-picker window for where to save results…", flush=True)
-    ARGS.out = _pick_folder("Choose a folder for the results (will be created if needed)")
+    if ARGS.no_gui:
+        ARGS.out = "pii_output"
+    else:
+        print("No --out given: opening a folder-picker window for where to save results…", flush=True)
+        ARGS.out = _pick_folder("Choose a folder for the results (will be created if needed)")
 
-PDF, DOCX, PPTX = (os.path.abspath(x) for x in (ARGS.pdf, ARGS.docx, ARGS.pptx))
+PDF = os.path.abspath(ARGS.pdf) if ARGS.pdf else None
+DOCX = os.path.abspath(ARGS.docx) if ARGS.docx else None
+PPTX = os.path.abspath(ARGS.pptx) if ARGS.pptx else None
 OUT = os.path.abspath(ARGS.out)
 WORK = os.path.join(OUT, "_work")
 for d_ in (OUT, WORK, os.path.join(WORK, "pages"), os.path.join(WORK, "tsv")):
     os.makedirs(d_, exist_ok=True)
 for f_ in (PDF, DOCX, PPTX):
-    if not os.path.exists(f_):
+    if f_ and not os.path.exists(f_):
         sys.exit(f"File not found: {f_}")
 
 
@@ -125,9 +139,9 @@ def _tool(name, folder):
              f"({'--tesseract' if name == 'tesseract' else '--poppler'}). See README.md.")
 
 
-TESSERACT = _tool("tesseract", ARGS.tesseract)
-PDFTOPPM = _tool("pdftoppm", ARGS.poppler)
-PDFTOTEXT = _tool("pdftotext", ARGS.poppler)
+TESSERACT = _tool("tesseract", ARGS.tesseract) if (PDF or DOCX) else None   # OCR: PDF pages + DOCX images
+PDFTOPPM = _tool("pdftoppm", ARGS.poppler) if PDF else None
+PDFTOTEXT = _tool("pdftotext", ARGS.poppler) if PDF else None
 
 
 def _font_path():
@@ -694,24 +708,27 @@ def leakage_gate(rows):
     DOCX/PPTX are checked in their text layer; the rasterized PDF is RE-OCR'd from the masked page images.
     Catches masking bugs (detected but not removed), not detection misses."""
     texts = {}
-    d = Document(os.path.join(OUT, stem(DOCX) + "_MASKED.docx"))
-    parts = [p.text for p in d.paragraphs] + [c.text for tb in d.tables for row in tb.rows for c in row.cells]
-    texts[A_DOCX] = "\n".join(parts)
-    pr = Presentation(os.path.join(OUT, stem(PPTX) + "_MASKED.pptx"))
-    parts = []
-    for s in pr.slides:
-        for sh in s.shapes:
-            if sh.has_text_frame:
-                parts.append(sh.text_frame.text)
-            if getattr(sh, "has_table", False) and sh.has_table:
-                parts += [c.text for row in sh.table.rows for c in row.cells]
-        if s.has_notes_slide:
-            parts.append(s.notes_slide.notes_text_frame.text)
-    texts[A_PPTX] = "\n".join(parts)
-    # PDF output is rasterized, so re-OCR the masked page images to read what actually renders
-    print("  re-OCR of masked PDF pages for the leakage gate…", flush=True)
-    masked_pages = sorted(glob.glob(os.path.join(WORK, "masked_p*.jpg")))
-    texts[A_PDF] = " ".join(_run([TESSERACT, p, "stdout", "--psm", "3"]).stdout for p in masked_pages)
+    if DOCX:
+        d = Document(os.path.join(OUT, stem(DOCX) + "_MASKED.docx"))
+        parts = [p.text for p in d.paragraphs] + [c.text for tb in d.tables for row in tb.rows for c in row.cells]
+        texts[A_DOCX] = "\n".join(parts)
+    if PPTX:
+        pr = Presentation(os.path.join(OUT, stem(PPTX) + "_MASKED.pptx"))
+        parts = []
+        for s in pr.slides:
+            for sh in s.shapes:
+                if sh.has_text_frame:
+                    parts.append(sh.text_frame.text)
+                if getattr(sh, "has_table", False) and sh.has_table:
+                    parts += [c.text for row in sh.table.rows for c in row.cells]
+            if s.has_notes_slide:
+                parts.append(s.notes_slide.notes_text_frame.text)
+        texts[A_PPTX] = "\n".join(parts)
+    if PDF:
+        # PDF output is rasterized, so re-OCR the masked page images to read what actually renders
+        print("  re-OCR of masked PDF pages for the leakage gate…", flush=True)
+        masked_pages = sorted(glob.glob(os.path.join(WORK, "masked_p*.jpg")))
+        texts[A_PDF] = " ".join(_run([TESSERACT, p, "stdout", "--psm", "3"]).stdout for p in masked_pages)
     survivors = []
     for r in rows:
         t = texts.get(r["artifact"])
@@ -749,17 +766,23 @@ def mask_pptx(T):
 
 if __name__ == "__main__":
     import pickle
-    print("Stage 1/4  extracting text (first run takes several minutes: OCR of every page)…", flush=True)
-    PAGES = render_pdf_pages()
+    print("Stage 1/4  extracting text (first run can take minutes: OCR of every page)…", flush=True)
+    PAGES = render_pdf_pages() if PDF else []
     cache = os.path.join(WORK, "extract.pkl")
-    if os.path.exists(cache):
-        pdf_segs, pages_meta, pdf_native_chars, docx_segs, pptx_segs = pickle.load(open(cache, "rb"))
+    cache_key = (PDF, DOCX, PPTX)
+    saved = pickle.load(open(cache, "rb")) if os.path.exists(cache) else None
+    if isinstance(saved, dict) and saved.get("key") == cache_key:
+        pdf_segs, pages_meta, pdf_native_chars, docx_segs, pptx_segs = saved["data"]
     else:
-        pdf_segs, pages_meta, pdf_native_chars = extract_pdf()
-        print("  reading Word file and its screenshots…", flush=True)
-        docx_segs = extract_docx()
-        pptx_segs = extract_pptx()
-        pickle.dump((pdf_segs, pages_meta, pdf_native_chars, docx_segs, pptx_segs), open(cache, "wb"))
+        pdf_segs, pages_meta, pdf_native_chars = extract_pdf() if PDF else ([], [], 0)
+        if DOCX:
+            print("  reading Word file and its screenshots…", flush=True)
+            docx_segs = extract_docx()
+        else:
+            docx_segs = []
+        pptx_segs = extract_pptx() if PPTX else []
+        pickle.dump({"key": cache_key, "data": (pdf_segs, pages_meta, pdf_native_chars, docx_segs, pptx_segs)},
+                    open(cache, "wb"))
     with open(os.path.join(WORK, "all_text.txt"), "w", encoding="utf-8") as f_:
         f_.write("\n".join(s.text for s in pdf_segs + docx_segs + pptx_segs))
     segs = pdf_segs + docx_segs + pptx_segs
@@ -779,7 +802,7 @@ if __name__ == "__main__":
     def para_spans(text):
         sp = D.regex_spans(text) + D.person_spans_pattern(text) + D.gazetteer_spans(text, gaz) + D.person_spans_ner(nlp, text)
         return D.resolve_overlaps(sp)
-    for doc_path, kind in ((DOCX, "docx"), (PPTX, "pptx")):
+    for doc_path, kind in ([(DOCX, "docx")] if DOCX else []) + ([(PPTX, "pptx")] if PPTX else []):
         if kind == "docx":
             d = Document(doc_path)
             paras = list(d.paragraphs) + [p for tb in d.tables for row in tb.rows for c in row.cells for p in c.paragraphs]
@@ -800,12 +823,19 @@ if __name__ == "__main__":
                 SPAN_CACHE[t] = para_spans(t)
 
     print("Stage 3/4  writing masked copies…", flush=True)
-    pdf_out, fig_redactions = mask_pdf(inv_segs, T)
-    docx_out, nd = mask_docx(inv_segs, T)
-    pptx_out, np_ = mask_pptx(T)
+    pdf_out = docx_out = pptx_out = None
+    fig_redactions = []
+    if PDF:
+        pdf_out, fig_redactions = mask_pdf(inv_segs, T)
+    if DOCX:
+        docx_out, nd = mask_docx(inv_segs, T)
+    if PPTX:
+        pptx_out, np_ = mask_pptx(T)
 
+    INV_FIELDS = ["artifact", "location", "context", "method", "category", "tier",
+                  "value", "token", "confidence", "rule", "snippet"]
     with open(os.path.join(OUT, "pii_inventory.csv"), "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w = csv.DictWriter(f, fieldnames=INV_FIELDS)
         w.writeheader(); w.writerows(rows)
     xref = []
     for tok, names in sorted(T.person_names.items()):
@@ -813,13 +843,13 @@ if __name__ == "__main__":
         xref.append(dict(token=tok, names=" | ".join(sorted(names)), artifacts=" + ".join(arts),
                          mentions=sum(1 for r in rows if r["token"] == tok)))
     with open(os.path.join(OUT, "person_token_map.csv"), "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=list(xref[0].keys())); w.writeheader(); w.writerows(xref)
+        w = csv.DictWriter(f, fieldnames=["token", "names", "artifacts", "mentions"]); w.writeheader(); w.writerows(xref)
     text_chars = Counter()
     for s in inv_segs:
         text_chars[s.artifact] += len(s.text)
     # embedded media we cannot OCR (vector EMF/SVG/WMF) -> flag for manual review, don't claim it's clean
     uninspected_media = []
-    for path, art in ((DOCX, A_DOCX), (PPTX, A_PPTX)):
+    for path, art in (([(DOCX, A_DOCX)] if DOCX else []) + ([(PPTX, A_PPTX)] if PPTX else [])):
         for name in zipfile.ZipFile(path).namelist():
             if "/media/" in name and not name.lower().endswith((".png", ".jpg", ".jpeg")):
                 uninspected_media.append(dict(artifact=art, media=os.path.basename(name)))
@@ -837,7 +867,7 @@ if __name__ == "__main__":
     json.dump(dict(pages=pages_meta, pdf_native_chars=pdf_native_chars, text_chars=text_chars,
                    figure_redactions=fig_redactions, residual_leaks=residual_leaks,
                    uninspected_media=uninspected_media,
-                   base_fig=base_fig_rows, masked=[pdf_out, docx_out, pptx_out]),
+                   base_fig=base_fig_rows, masked=[x for x in (pdf_out, docx_out, pptx_out) if x]),
               open(os.path.join(OUT, "run_meta.json"), "w", encoding="utf-8"), default=str, indent=1)
     print("Stage 4/4  computing metrics…", flush=True)
     import metrics

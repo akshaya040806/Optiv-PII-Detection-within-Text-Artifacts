@@ -72,6 +72,22 @@ opening a window if any path is missing — safe to leave off either way.
 
 You'll see progress messages (Stage 1/4 … Stage 4/4) and finally `Done: … findings`.
 
+### Run on a single file (any type)
+You don't have to supply all three files. Pass just one with `--file` — the type is detected
+automatically:
+```
+python pipeline.py --file "C:\path\to\anything.pdf" --out results --tesseract "C:\Program Files\Tesseract-OCR\tesseract.exe" --poppler "C:\poppler\Library\bin" --no-gui
+```
+(A `.docx` or `.pptx` needs no `--poppler`; a `.pptx` needs no `--tesseract` either.)
+
+### Point-and-click UI
+For a drag-and-drop demo, launch the web app (needs `pip install streamlit`):
+```
+streamlit run app.py
+```
+Upload a PDF/Word/PowerPoint, click **Scan & Redact**, and download the redacted file plus the
+findings. The UI shows only the replacement **tokens**, never the raw PII.
+
 ## What you get (in the `results` folder)
 
 | File | What it is |

@@ -1,5 +1,6 @@
 # Pipeline output: masked copies, inventory, and the re-identification key — never commit (contains/derives from PII)
 results/
+results_*/
 pii_output/
 
 # Byte-compiled / optimized / DLL files

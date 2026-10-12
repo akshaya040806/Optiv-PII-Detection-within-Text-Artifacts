@@ -76,6 +76,9 @@ def run(OUT, all_text_path):
   red_pages = {r["page"] for r in meta.get("figure_redactions", [])}
   eff = [g["found"] or (g["context"] == "image" and g["page"] in red_pages) for g in res]
   M["gold_effective_coverage"] = [sum(eff), len(eff), round(100 * sum(eff) / len(eff), 1)]
+  if not any(r["artifact"].startswith("Risk") for r in rows):   # gold set only applies to the Cadence PDF
+      for k in ("gold_recall_text", "gold_recall_image", "gold_recall_overall", "gold_effective_coverage"):
+          M[k] = "n/a (gold set applies to the Cadence policy PDF only)"
   M["figure_redactions"] = meta.get("figure_redactions", [])
   # Independent leakage gate: detected PII values re-checked against the actual masked output text.
   M["residual_leaks"] = meta.get("residual_leaks", [])
