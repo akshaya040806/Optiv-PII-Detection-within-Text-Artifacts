@@ -1,3 +1,5 @@
+
+
 const $ = (id) => document.getElementById(id);
 const dz = $("dropzone"), fileInput = $("fileInput"), scanBtn = $("scanBtn");
 let chosen = null;

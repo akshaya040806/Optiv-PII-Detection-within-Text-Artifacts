@@ -2,6 +2,7 @@
 results/
 results_*/
 pii_output/
+brag-output/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
