@@ -8,8 +8,8 @@ img2pdf
 wordfreq
 rapidfuzz
 
-# Optional: point-and-click web UI (app.py)
-# streamlit
+# Optional: point-and-click web UI (server.py + web/)
+# flask
 
 # Optional: stronger transformer NER backend (pulls PyTorch, ~2.5GB). Then run with
 #   python pipeline.py --ner-model en_core_web_trf ...

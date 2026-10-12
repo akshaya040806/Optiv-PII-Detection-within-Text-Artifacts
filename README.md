@@ -80,13 +80,15 @@ python pipeline.py --file "C:\path\to\anything.pdf" --out results --tesseract "C
 ```
 (A `.docx` or `.pptx` needs no `--poppler`; a `.pptx` needs no `--tesseract` either.)
 
-### Point-and-click UI
-For a drag-and-drop demo, launch the web app (needs `pip install streamlit`):
+### Point-and-click web UI
+For a drag-and-drop demo, launch the web app (needs `pip install flask`):
 ```
-streamlit run app.py
+python server.py
 ```
-Upload a PDF/Word/PowerPoint, click **Scan & Redact**, and download the redacted file plus the
-findings. The UI shows only the replacement **tokens**, never the raw PII.
+Then open **http://127.0.0.1:5000** in your browser, drop in a PDF/Word/PowerPoint, click
+**Scan & Redact**, and download the redacted file plus the findings. The UI (in `web/`, plain
+HTML/CSS/JS so it's easy to restyle) shows only the replacement **tokens**, never the raw PII.
+Set `TESSERACT` / `POPPLER` environment variables if they aren't in the usual install locations.
 
 ## What you get (in the `results` folder)
 

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PII Detection &amp; Redaction Gate</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo"></span> PII Detection &amp; Redaction Gate</div>
+    <div class="sub">Strip personal data from any document — and prove nothing leaked — before it reaches an AI model.</div>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <div id="dropzone" class="dropzone">
+        <input type="file" id="fileInput" accept=".pdf,.docx,.pptx" hidden />
+        <div class="dz-icon">&#8679;</div>
+        <p class="dz-text">Drop a <b>PDF</b>, <b>Word</b> or <b>PowerPoint</b> file here<br />or <span class="link">browse</span></p>
+        <p class="dz-file" id="fileName"></p>
+      </div>
+      <div class="controls">
+        <label class="sel">Name model
+          <select id="ner">
+            <option value="en_core_web_sm">Fast (sm)</option>
+            <option value="en_core_web_trf">Stronger (trf)</option>
+          </select>
+        </label>
+        <button id="scanBtn" class="btn" disabled>Scan &amp; Redact</button>
+      </div>
+      <p class="hint">PDFs are OCR'd page-by-page and can take a few minutes. Office files are quick.</p>
+    </section>
+
+    <section id="loading" class="card center hidden">
+      <div class="spinner"></div>
+      <p id="loadingText">Extracting &rarr; detecting &rarr; redacting &rarr; verifying&hellip;</p>
+    </section>
+
+    <section id="errorBox" class="card error hidden"></section>
+
+    <section id="results" class="hidden">
+      <div id="gateBanner" class="banner"></div>
+
+      <div class="metrics">
+        <div class="metric"><div class="m-num" id="mFindings">0</div><div class="m-lbl">PII findings</div></div>
+        <div class="metric"><div class="m-num" id="mPeople">0</div><div class="m-lbl">Unique people</div></div>
+        <div class="metric"><div class="m-num" id="mSealed">0</div><div class="m-lbl">Regions sealed</div></div>
+        <div class="metric"><div class="m-num" id="mResidual">0</div><div class="m-lbl">Residual leaks</div></div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <h3>What we found</h3>
+          <div id="chart" class="chart"></div>
+          <div id="tiers" class="tiers"></div>
+        </div>
+        <div class="card">
+          <h3>Download</h3>
+          <a id="dlMasked" class="btn block" href="#">&#8595; Download redacted file</a>
+          <a id="dlInv" class="btn ghost block" href="#">&#8595; Download PII inventory (CSV)</a>
+          <p class="note">The redacted file is safe to send to an LLM. The re-identification key stays
+            server-side and is never downloadable &mdash; by design.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Audit trail <span class="muted">&mdash; tokens only, never raw PII</span></h3>
+        <div class="table-wrap">
+          <table id="auditTable">
+            <thead><tr><th>Category</th><th>Tier</th><th>Token</th><th>Rule</th><th>Location</th><th>Conf.</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">Optiv VIT Case Study 2 &middot; runs fully offline &middot; hybrid detection + fail-closed sealing + independent verification</footer>
+  <script src="app.js"></script>
+</body>
+</html>
