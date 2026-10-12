@@ -9,14 +9,15 @@ import csv
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import uuid
-from collections import Counter
 from pathlib import Path
 
-from flask import Flask, request, jsonify, send_file, send_from_directory
+from flask import (Flask, request, jsonify, send_file, send_from_directory,
+                   Response, stream_with_context)
 
 HERE = Path(__file__).parent
 app = Flask(__name__, static_folder=str(HERE / "web"), static_url_path="")
@@ -32,6 +33,34 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+def _mask_snippet(snippet, value, token):
+    """Tokens-only guarantee: blank the finding's own raw value out of its context preview."""
+    if not value or not snippet:
+        return snippet
+    pat = re.compile(r"\s+".join(map(re.escape, value.split())))
+    return pat.sub("[" + token + "]", snippet)
+
+
+def _build_result(outdir, filename):
+    metrics = json.load(open(outdir / "metrics.json", encoding="utf-8"))
+    rows = list(csv.DictReader(open(outdir / "pii_inventory.csv", encoding="utf-8-sig")))
+    masked = next((p for p in outdir.glob("*_MASKED.*")), None)
+    sid = uuid.uuid4().hex
+    SESSIONS[sid] = {"outdir": outdir, "masked": str(masked) if masked else None}
+    return dict(
+        sid=sid, filename=filename,
+        masked_name=(masked.name if masked else None),
+        findings=len(rows),
+        people=metrics.get("unique_people", 0),
+        sealed=len(metrics.get("figure_redactions", [])),
+        residual=metrics.get("residual_leak_count", 0),
+        audit=[{"category": x["category"], "tier": x["tier"], "token": x["token"],
+                "rule": x["rule"], "location": x["location"], "confidence": x["confidence"],
+                "snippet": _mask_snippet(x.get("snippet", ""), x.get("value", ""), x["token"])}
+               for x in rows],
+    )
+
+
 @app.post("/scan")
 def scan():
     f = request.files.get("file")
@@ -45,6 +74,7 @@ def scan():
     inp = work / f.filename
     f.save(str(inp))
     outdir = work / "out"
+    filename = f.filename
     ner = request.form.get("ner", "en_core_web_sm")
     cmd = [sys.executable, str(HERE / "pipeline.py"), "--file", str(inp), "--out", str(outdir),
            "--ner-model", ner, "--no-gui"]
@@ -53,31 +83,29 @@ def scan():
     if POPPLER:
         cmd += ["--poppler", POPPLER]
 
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        return jsonify(error="Pipeline failed", log=(r.stderr or r.stdout)[-3000:]), 500
+    def generate():
+        # Stream the pipeline's own stage output line-by-line (P:…), then the final JSON result (R:…).
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1, encoding="utf-8", errors="replace")
+        tail = []
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line:
+                tail.append(line)
+                yield "P:" + line + "\n"
+        proc.wait()
+        if proc.returncode != 0:
+            yield "E:" + json.dumps({"error": "Pipeline failed", "log": "\n".join(tail[-40:])}) + "\n"
+            return
+        try:
+            result = _build_result(outdir, filename)
+        except Exception as e:  # noqa: BLE001  (surface any result-build failure to the client)
+            yield "E:" + json.dumps({"error": "Result build failed: %s" % e}) + "\n"
+            return
+        yield "R:" + json.dumps(result) + "\n"
 
-    metrics = json.load(open(outdir / "metrics.json", encoding="utf-8"))
-    rows = list(csv.DictReader(open(outdir / "pii_inventory.csv", encoding="utf-8-sig")))
-    masked = next((p for p in outdir.glob("*_MASKED.*")), None)
-    sid = uuid.uuid4().hex
-    SESSIONS[sid] = {"outdir": outdir, "masked": str(masked) if masked else None}
-
-    return jsonify(
-        sid=sid,
-        filename=f.filename,
-        masked_name=(masked.name if masked else None),
-        findings=len(rows),
-        people=metrics.get("unique_people", 0),
-        sealed=len(metrics.get("figure_redactions", [])),
-        residual=metrics.get("residual_leak_count", 0),
-        by_category=dict(Counter(x["category"] for x in rows)),
-        by_tier=dict(Counter(x["tier"] for x in rows)),
-        audit=[{"category": x["category"], "tier": x["tier"], "token": x["token"],
-                "rule": x["rule"], "location": x["location"], "confidence": x["confidence"]}
-               for x in rows],
-        log=r.stdout[-4000:],
-    )
+    return Response(stream_with_context(generate()), mimetype="text/plain",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/download/<sid>")

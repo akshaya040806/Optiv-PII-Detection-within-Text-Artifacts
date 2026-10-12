@@ -11,6 +11,9 @@ rapidfuzz
 # Optional: point-and-click web UI (server.py + web/)
 # flask
 
+# Optional: generate the report + findings PDFs (make_reports.py)
+# reportlab
+
 # Optional: stronger transformer NER backend (pulls PyTorch, ~2.5GB). Then run with
 #   python pipeline.py --ner-model en_core_web_trf ...
 # spacy-transformers

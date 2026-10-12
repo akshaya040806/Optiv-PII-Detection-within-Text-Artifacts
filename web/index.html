@@ -12,74 +12,132 @@
     <div class="sub">Strip personal data from any document — and prove nothing leaked — before it reaches an AI model.</div>
   </header>
 
-  <main class="container">
-    <section class="card">
-      <div id="dropzone" class="dropzone">
-        <input type="file" id="fileInput" accept=".pdf,.docx,.pptx" hidden />
-        <div class="dz-icon">&#8679;</div>
-        <p class="dz-text">Drop a <b>PDF</b>, <b>Word</b> or <b>PowerPoint</b> file here<br />or <span class="link">browse</span></p>
-        <p class="dz-file" id="fileName"></p>
+  <div class="layout">
+    <!-- ───────── filter + review sidebar ───────── -->
+    <aside class="sidebar">
+      <h4>Filters &amp; review</h4>
+      <p class="side-pre" id="sidePre">Run a scan to filter findings and build a human-review queue.</p>
+
+      <div class="side-controls hidden" id="sideControls">
+        <div class="fgroup">
+          <label class="flabel">Search</label>
+          <input type="search" id="searchBox" class="search" placeholder="token, rule, location…" />
+        </div>
+
+        <div class="fgroup">
+          <label class="flabel">Confidence threshold <span class="fval" id="confVal">0.80</span></label>
+          <input type="range" id="confSlider" min="0.5" max="1" step="0.05" value="0.8" />
+          <p class="fhelp">Report shows findings <b>&ge; threshold</b>. Anything below drops into the
+            review queue. Set a per-category override below to tune individual categories.</p>
+        </div>
+
+        <div class="fgroup">
+          <label class="flabel">Sensitivity tier</label>
+          <label class="chk"><input type="checkbox" class="tierChk" value="Critical" checked /> Critical</label>
+          <label class="chk"><input type="checkbox" class="tierChk" value="High" checked /> High</label>
+          <label class="chk"><input type="checkbox" class="tierChk" value="Medium" checked /> Medium</label>
+        </div>
+
+        <div class="fgroup">
+          <label class="flabel">Category <span class="fhint">· override threshold</span></label>
+          <div id="catList" class="catlist"></div>
+        </div>
+
+        <div class="fgroup">
+          <label class="chk strong"><input type="checkbox" id="reviewToggle" checked /> Human-review labeling</label>
+          <p class="fhelp">Confirm or reject low-confidence findings to build a human-labeled gold set.
+            Keys: <b>A</b> confirm · <b>R</b> reject · <b>&uarr;/&darr;</b> move.</p>
+        </div>
+
+        <button class="btn ghost block" id="resetFilters">Reset filters</button>
+        <button class="btn ghost block" id="clearSaved">Clear saved session</button>
       </div>
-      <div class="controls">
-        <label class="sel">Name model
-          <select id="ner">
-            <option value="en_core_web_sm">Fast (sm)</option>
-            <option value="en_core_web_trf">Stronger (trf)</option>
-          </select>
-        </label>
-        <button id="scanBtn" class="btn" disabled>Scan &amp; Redact</button>
-      </div>
-      <p class="hint">PDFs are OCR'd page-by-page and can take a few minutes. Office files are quick.</p>
-    </section>
+    </aside>
 
-    <section id="loading" class="card center hidden">
-      <div class="atom">
-        <div class="orbit o1"><div class="spin"><span class="el"></span></div></div>
-        <div class="orbit o2"><div class="spin"><span class="el"></span></div></div>
-        <div class="orbit o3"><div class="spin"><span class="el"></span></div></div>
-        <div class="nucleus"></div>
-      </div>
-      <p id="loadingText">Extracting &rarr; detecting &rarr; redacting &rarr; verifying&hellip;</p>
-    </section>
+    <main class="container">
+      <section class="card">
+        <div id="dropzone" class="dropzone">
+          <input type="file" id="fileInput" accept=".pdf,.docx,.pptx" hidden />
+          <div class="dz-icon">&#8679;</div>
+          <p class="dz-text">Drop a <b>PDF</b>, <b>Word</b> or <b>PowerPoint</b> file here<br />or <span class="link">browse</span></p>
+          <p class="dz-file" id="fileName"></p>
+        </div>
+        <div class="controls">
+          <label class="sel">Name model
+            <select id="ner">
+              <option value="en_core_web_sm">Fast (sm)</option>
+              <option value="en_core_web_trf">Stronger (trf)</option>
+            </select>
+          </label>
+          <button id="scanBtn" class="btn" disabled>Scan &amp; Redact</button>
+        </div>
+        <p class="hint">PDFs are OCR'd page-by-page and can take a few minutes. Office files are quick.</p>
+      </section>
 
-    <section id="errorBox" class="card error hidden"></section>
+      <section id="loading" class="card center hidden">
+        <div class="atom">
+          <div class="orbit o1"><div class="spin"><span class="el"></span></div></div>
+          <div class="orbit o2"><div class="spin"><span class="el"></span></div></div>
+          <div class="orbit o3"><div class="spin"><span class="el"></span></div></div>
+          <div class="nucleus"></div>
+        </div>
+        <p id="loadingText">Extracting &rarr; detecting &rarr; redacting &rarr; verifying&hellip;</p>
+        <p id="loadingStage" class="stageline"></p>
+      </section>
 
-    <section id="results" class="hidden">
-      <div id="gateBanner" class="banner"></div>
+      <section id="errorBox" class="card error hidden"></section>
 
-      <div class="metrics">
-        <div class="metric"><div class="m-num" id="mFindings">0</div><div class="m-lbl">PII findings</div></div>
-        <div class="metric"><div class="m-num" id="mPeople">0</div><div class="m-lbl">Unique people</div></div>
-        <div class="metric"><div class="m-num" id="mSealed">0</div><div class="m-lbl">Regions sealed</div></div>
-        <div class="metric"><div class="m-num" id="mResidual">0</div><div class="m-lbl">Residual leaks</div></div>
-      </div>
+      <section id="results" class="hidden">
+        <div id="gateBanner" class="banner"></div>
 
-      <div class="grid2">
+        <div class="metrics">
+          <div class="metric risk" id="riskCard"><div class="m-num" id="mRisk">0</div><div class="m-lbl">weighted risk</div></div>
+          <div class="metric"><div class="m-num" id="mFindings">0</div><div class="m-lbl">cleared findings</div></div>
+          <div class="metric"><div class="m-num" id="mPeople">0</div><div class="m-lbl">unique people</div></div>
+          <div class="metric"><div class="m-num" id="mSealed">0</div><div class="m-lbl">regions sealed</div></div>
+          <div class="metric"><div class="m-num" id="mResidual">0</div><div class="m-lbl">residual leaks</div></div>
+        </div>
+        <p class="summary" id="summary"></p>
+
+        <div class="grid2">
+          <div class="card">
+            <h3>What we found <span class="muted">&mdash; above threshold</span></h3>
+            <div id="chart" class="chart"></div>
+            <div id="tiers" class="tiers"></div>
+          </div>
+          <div class="card">
+            <h3>Download</h3>
+            <a id="dlMasked" class="btn block" href="#">&#8595; Download redacted file</a>
+            <a id="dlInv" class="btn ghost block" href="#">&#8595; Download full PII inventory (CSV)</a>
+            <a id="exportFiltered" class="btn ghost block" href="#">&#8595; Export filtered findings (CSV)</a>
+            <p class="note">The redacted file is safe to send to an LLM. The re-identification key stays
+              server-side and is never downloadable &mdash; by design.</p>
+          </div>
+        </div>
+
         <div class="card">
-          <h3>What we found</h3>
-          <div id="chart" class="chart"></div>
-          <div id="tiers" class="tiers"></div>
+          <h3>Audit trail <span class="muted">&mdash; tokens only · click a row for masked context</span></h3>
+          <div class="table-wrap">
+            <table id="auditTable">
+              <thead><tr><th>Category</th><th>Tier</th><th>Token</th><th>Rule</th><th>Location</th><th>Conf.</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
-        <div class="card">
-          <h3>Download</h3>
-          <a id="dlMasked" class="btn block" href="#">&#8595; Download redacted file</a>
-          <a id="dlInv" class="btn ghost block" href="#">&#8595; Download PII inventory (CSV)</a>
-          <p class="note">The redacted file is safe to send to an LLM. The re-identification key stays
-            server-side and is never downloadable &mdash; by design.</p>
-        </div>
-      </div>
 
-      <div class="card">
-        <h3>Audit trail <span class="muted">&mdash; tokens only, never raw PII</span></h3>
-        <div class="table-wrap">
-          <table id="auditTable">
-            <thead><tr><th>Category</th><th>Tier</th><th>Token</th><th>Rule</th><th>Location</th><th>Conf.</th></tr></thead>
-            <tbody></tbody>
-          </table>
+        <div class="card" id="queueCard">
+          <h3>Human review queue <span class="muted" id="queueSub">&mdash; low-confidence findings</span>
+            <a class="btn ghost mini" id="exportLabels" href="#">&#8595; Export reviewed labels (CSV)</a></h3>
+          <div class="table-wrap">
+            <table id="queueTable">
+              <thead><tr><th>Category</th><th>Tier</th><th>Token</th><th>Rule</th><th>Location</th><th>Conf.</th><th>Decision</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
-      </div>
-    </section>
-  </main>
+      </section>
+    </main>
+  </div>
 
   <footer class="foot">Optiv VIT Case Study 2 &middot; runs fully offline &middot; hybrid detection + fail-closed sealing + independent verification</footer>
   <script src="app.js"></script>

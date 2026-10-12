@@ -139,7 +139,7 @@ def _tool(name, folder):
              f"({'--tesseract' if name == 'tesseract' else '--poppler'}). See README.md.")
 
 
-TESSERACT = _tool("tesseract", ARGS.tesseract) if (PDF or DOCX) else None   # OCR: PDF pages + DOCX images
+TESSERACT = _tool("tesseract", ARGS.tesseract) if (PDF or DOCX or PPTX) else None   # OCR: PDF pages + DOCX/PPTX images
 PDFTOPPM = _tool("pdftoppm", ARGS.poppler) if PDF else None
 PDFTOTEXT = _tool("pdftotext", ARGS.poppler) if PDF else None
 
@@ -284,6 +284,20 @@ def pdf_regions(img):
                     break
                 y = nxt[0]
             regions.append(("table", 290, y0, W - 290, y + 4))
+    # Generic fail-closed fallback: on a page where the palette-tuned detectors above found NOTHING
+    # (i.e. a differently-styled, non-Cadence PDF), seal large continuous-tone blocks (photos / charts /
+    # figures) detected by edges alone — no colour assumptions. Gated on `not regions`, so pages the
+    # tuned path handles (all of the Cadence corpus) are untouched; only unknown layouts trigger it.
+    if not regions:
+        edges = cv2.dilate(cv2.Canny(a.astype(np.uint8)[:, :, 0], 50, 150), np.ones((5, 5), np.uint8), iterations=2)
+        cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        gray = a.mean(2)
+        for c in cnts:
+            x, y, w, h = cv2.boundingRect(c)
+            if w > 0.25 * W and h > 0.12 * H and w * h < 0.85 * W * H:
+                crop = gray[y:y + h, x:x + w]
+                if ((crop > 60) & (crop < 205)).mean() > 0.18:   # continuous-tone => figure/photo, not plain text
+                    regions.append(("image", x, y, x + w, y + h))
     return regions
 
 
@@ -414,6 +428,15 @@ def extract_pptx():
         v = getattr(cp, f)
         if v and v.strip():
             segs.append(Seg(A_PPTX, f"metadata:{f}", "metadata", v, "native"))
+    # embedded images (screenshots) are OCR'd and sealed, same as DOCX — PII can hide in slide pictures
+    z = zipfile.ZipFile(PPTX)
+    for name in sorted(z.namelist()):
+        if name.startswith("ppt/media/") and name.lower().endswith((".png", ".jpg", ".jpeg")):
+            p = os.path.join(WORK, f"pptx_{os.path.basename(name)}")
+            open(p, "wb").write(z.read(name))
+            ws = tsv_words(ocr_tsv(p))
+            for text, idx in group_paras(ws):
+                segs.append(Seg(A_PPTX, os.path.basename(name), "image", text, "ocr", idx, image=name))
     return segs
 
 
@@ -747,7 +770,7 @@ def leakage_gate(rows):
     return survivors
 
 
-def mask_pptx(T):
+def mask_pptx(segs, T):
     pr = Presentation(PPTX)
     n = 0
     for s in pr.slides:
@@ -768,8 +791,29 @@ def mask_pptx(T):
         v = getattr(cp, f)
         if v:
             setattr(cp, f, "[" + short(T.person(re.sub(r"\[.*?\]\s*", "", v).strip())) + "]")
+    tmp = os.path.join(WORK, "pptx_masked_tmp.pptx")
+    pr.save(tmp)
+    # Fail closed: seal every embedded image OCR found text in (a screenshot), same policy as DOCX —
+    # OCR can miss a name inside the shot, so seal the whole picture rather than trust per-word masking.
+    seal = {s.image for s in segs if s.artifact == A_PPTX and s.image and s.text.strip()}
     out = os.path.join(OUT, stem(PPTX) + "_MASKED.pptx")
-    pr.save(out)
+    zin, zout = zipfile.ZipFile(tmp), zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED)
+    for item in zin.infolist():
+        data = zin.read(item.filename)
+        if item.filename in seal:
+            img = Image.open(io.BytesIO(data)).convert("RGB")
+            dr = ImageDraw.Draw(img)
+            dr.rectangle([0, 0, img.width, img.height], fill=(20, 30, 50))
+            try:
+                dr.text((15, 15), "IMAGE REDACTED - embedded screenshot sealed, not passed to the LLM",
+                        fill=(240, 200, 90), font=get_font(max(12, img.width // 45)))
+            except Exception:
+                pass
+            fmt = "JPEG" if item.filename.lower().endswith((".jpg", ".jpeg")) else "PNG"
+            buf = io.BytesIO(); img.save(buf, fmt); data = buf.getvalue()
+        zout.writestr(item, data)
+    zout.close()
+    zin.close()
     return out, n
 
 
@@ -839,7 +883,7 @@ if __name__ == "__main__":
     if DOCX:
         docx_out, nd = mask_docx(inv_segs, T)
     if PPTX:
-        pptx_out, np_ = mask_pptx(T)
+        pptx_out, np_ = mask_pptx(inv_segs, T)
 
     INV_FIELDS = ["artifact", "location", "context", "method", "category", "tier",
                   "value", "token", "confidence", "rule", "snippet"]

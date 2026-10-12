@@ -3,6 +3,8 @@ results/
 results_*/
 pii_output/
 brag-output/
+brag-output-*/
+PII_Findings_Inventory.pdf
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
