@@ -1,0 +1,17 @@
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  typescript: {
+    ignoreBuildErrors: true,
+  },
+  images: {
+    unoptimized: true,
+  },
+  async rewrites() {
+    return [
+      { source: '/scan', destination: 'http://127.0.0.1:5000/scan' },
+      { source: '/download/:path*', destination: 'http://127.0.0.1:5000/download/:path*' },
+    ]
+  },
+}
+
+export default nextConfig

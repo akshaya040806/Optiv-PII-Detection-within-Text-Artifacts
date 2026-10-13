@@ -585,7 +585,8 @@ def mask_text(text, spans, toktext):
 
 SHORT = {"PERSON": "PER", "EMPLOYEE_ID": "EID", "PHONE": "TEL", "EMAIL": "EML", "HOME_ADDRESS": "ADR",
          "PASSPORT": "PPT", "PAN_IN": "PAN", "SSN_PARTIAL": "SSN4", "CARD_PARTIAL": "CRD4", "CARD_NUMBER": "CRD",
-         "ACCOUNT_PARTIAL": "ACC4", "IP_ADDRESS": "IP", "CREDENTIAL_ID": "CRED", "PHOTO": "PHOTO"}
+         "ACCOUNT_PARTIAL": "ACC4", "IP_ADDRESS": "IP", "CREDENTIAL_ID": "CRED", "PHOTO": "PHOTO",
+         "IBAN": "IBAN", "AADHAAR": "AAD", "NHS_NUMBER": "NHS", "NINO": "NIN"}
 
 
 def short(tok):

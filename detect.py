@@ -13,6 +13,7 @@ TIER = {
     "ACCOUNT_PARTIAL": "High", "DOB": "High", "HOME_ADDRESS": "High", "PHONE": "Medium",
     "EMAIL": "Medium", "EMPLOYEE_ID": "Medium", "PERSON": "Medium", "IP_ADDRESS": "Medium",
     "MONETARY_TXN": "Medium", "PHOTO": "High", "CREDENTIAL_ID": "Medium",
+    "IBAN": "Critical", "AADHAAR": "Critical", "NHS_NUMBER": "Critical", "NINO": "High",
 }
 
 
@@ -39,6 +40,39 @@ def pesel_ok(d):
 def ssn_valid_range(s):
     a, g, n = s.split("-")
     return not (a in ("000", "666") or a.startswith("9") or g == "00" or n == "0000")
+
+
+def iban_ok(iban):
+    iban = re.sub(r"\s", "", iban).upper()
+    if not re.fullmatch(r"[A-Z]{2}\d{2}[A-Z0-9]{11,30}", iban):
+        return False
+    rot = iban[4:] + iban[:4]
+    return int("".join(str(int(ch, 36)) for ch in rot)) % 97 == 1   # A->10 … Z->35, digits unchanged
+
+
+# Verhoeff checksum (India Aadhaar)
+_VH_D = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],[3,4,0,1,2,8,9,5,6,7],
+         [4,0,1,2,3,9,5,6,7,8],[5,9,8,7,6,0,4,3,2,1],[6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],
+         [8,7,6,5,9,3,2,1,0,4],[9,8,7,6,5,4,3,2,1,0]]
+_VH_P = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],[8,9,1,6,0,4,3,5,2,7],
+         [9,4,5,3,1,2,6,8,7,0],[4,2,8,6,5,7,3,9,0,1],[2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8]]
+
+
+def verhoeff_ok(num):
+    if not num.isdigit():
+        return False
+    c = 0
+    for i, d in enumerate(reversed(num)):
+        c = _VH_D[c][_VH_P[i % 8][int(d)]]
+    return c == 0
+
+
+def nhs_ok(d):
+    if len(d) != 10 or not d.isdigit():
+        return False
+    chk = 11 - sum(int(d[i]) * (10 - i) for i in range(9)) % 11
+    chk = 0 if chk == 11 else chk
+    return chk != 10 and chk == int(d[9])
 
 
 def _ctx(text, start, end, before=40, after=0):
@@ -85,6 +119,25 @@ def regex_spans(text):
             add(m, "PESEL", 0.9, "pesel-checksum")
     for m in re.finditer(r"PESEL\s+(\d{6}[xX*]{5})", text):
         add(m, "PESEL", 0.85, "pesel-partial+keyword", 1)
+
+    # IBAN (international bank account) — mod-97 checksum
+    for m in re.finditer(r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b", text):
+        if iban_ok(m.group()):
+            add(m, "IBAN", 0.97, "iban-mod97")
+    # India Aadhaar — 12 digits (4-4-4), Verhoeff checksum; spaced or keyword to avoid matching random 12-digit
+    # runs. The (?<!\d )/(?! \d) guards stop it matching a 12-digit slice inside a longer card/account number.
+    for m in re.finditer(r"(?<!\d )\b[2-9]\d{3}\s?\d{4}\s?\d{4}\b(?! \d)", text):
+        c = _ctx(text, m.start(), m.end(), 16)
+        if verhoeff_ok(re.sub(r"\D", "", m.group())) and (" " in m.group() or "aadhaar" in c or "uid" in c):
+            add(m, "AADHAAR", 0.9, "aadhaar-verhoeff")
+    # UK NHS number — 10 digits (3-3-4), mod-11 checksum; spaced or keyword to avoid matching phone-like runs
+    for m in re.finditer(r"(?<!\d )\b\d{3}\s?\d{3}\s?\d{4}\b(?! \d)", text):
+        c = _ctx(text, m.start(), m.end(), 16)
+        if nhs_ok(re.sub(r"\D", "", m.group())) and (" " in m.group() or "nhs" in c or "health" in c):
+            add(m, "NHS_NUMBER", 0.9, "nhs-mod11")
+    # UK National Insurance Number — structure + valid prefix letters
+    for m in re.finditer(r"\b[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z]\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-D]\b", text):
+        add(m, "NINO", 0.9, "uk-nino-structure")
 
     for m in re.finditer(r"(?i:passport)[\s:#]*([A-Z]{1,2}\d{6,8})\b", text):
         add(m, "PASSPORT", 0.95, "passport-keyword", 1)
@@ -299,8 +352,9 @@ def gazetteer_spans(text, gaz):
 
 
 def resolve_overlaps(spans):
-    prio = {k: i for i, k in enumerate(["SSN", "PASSPORT", "PAN_IN", "PESEL", "TIN", "CARD_NUMBER", "DOB",
-                                          "HOME_ADDRESS", "EMAIL", "EMPLOYEE_ID", "SSN_PARTIAL", "CARD_PARTIAL",
+    prio = {k: i for i, k in enumerate(["SSN", "PASSPORT", "PAN_IN", "PESEL", "AADHAAR", "NHS_NUMBER", "IBAN",
+                                          "NINO", "TIN", "CARD_NUMBER", "DOB", "HOME_ADDRESS", "EMAIL",
+                                          "EMPLOYEE_ID", "SSN_PARTIAL", "CARD_PARTIAL",
                                           "ACCOUNT_PARTIAL", "IP_ADDRESS", "PHONE", "PERSON"])}
     spans = sorted(spans, key=lambda s: (prio.get(s[2], 99), -s[3], -(s[1] - s[0])))
     taken, keep = [], []

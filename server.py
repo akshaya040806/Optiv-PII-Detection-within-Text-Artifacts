@@ -61,6 +61,26 @@ def _build_result(outdir, filename):
     )
 
 
+API_TOKEN = os.environ.get("PII_API_TOKEN")   # optional: if set, /api requires an X-API-Token header
+
+
+def _pipeline_cmd(inp, outdir, ner):
+    cmd = [sys.executable, str(HERE / "pipeline.py"), "--file", str(inp), "--out", str(outdir),
+           "--ner-model", ner, "--no-gui"]
+    if TESS:
+        cmd += ["--tesseract", TESS]
+    if POPPLER:
+        cmd += ["--poppler", POPPLER]
+    return cmd
+
+
+def _save_upload(f, prefix):
+    work = Path(tempfile.mkdtemp(prefix=prefix))
+    inp = work / f.filename
+    f.save(str(inp))
+    return inp, work / "out"
+
+
 @app.post("/scan")
 def scan():
     f = request.files.get("file")
@@ -70,18 +90,10 @@ def scan():
     if ext not in (".pdf", ".docx", ".pptx"):
         return jsonify(error="Only .pdf, .docx and .pptx are supported"), 400
 
-    work = Path(tempfile.mkdtemp(prefix="pii_web_"))
-    inp = work / f.filename
-    f.save(str(inp))
-    outdir = work / "out"
+    inp, outdir = _save_upload(f, "pii_web_")
     filename = f.filename
     ner = request.form.get("ner", "en_core_web_sm")
-    cmd = [sys.executable, str(HERE / "pipeline.py"), "--file", str(inp), "--out", str(outdir),
-           "--ner-model", ner, "--no-gui"]
-    if TESS:
-        cmd += ["--tesseract", TESS]
-    if POPPLER:
-        cmd += ["--poppler", POPPLER]
+    cmd = _pipeline_cmd(inp, outdir, ner)
 
     def generate():
         # Stream the pipeline's own stage output line-by-line (P:…), then the final JSON result (R:…).
@@ -125,6 +137,50 @@ def download_inventory(sid):
                      as_attachment=True, download_name="pii_inventory.csv")
 
 
+# ───────── REST API (gateway: sits in front of the LLM) ─────────
+@app.get("/api/v1")
+def api_usage():
+    return jsonify(
+        service="PII Detection & Redaction Gate",
+        offline=True,
+        endpoints={
+            "POST /api/v1/redact": "multipart form field 'file' (.pdf/.docx/.pptx) -> masked output + tokens-only inventory JSON",
+            "GET /api/v1/health": "liveness check",
+            "GET /download/<sid>": "download the redacted file",
+            "GET /download/<sid>/inventory": "download the full inventory CSV",
+        },
+        auth=("send header X-API-Token" if API_TOKEN else "none (set PII_API_TOKEN to require a token)"),
+    )
+
+
+@app.get("/api/v1/health")
+def api_health():
+    return jsonify(status="ok", offline=True)
+
+
+@app.post("/api/v1/redact")
+def api_redact():
+    if API_TOKEN and request.headers.get("X-API-Token") != API_TOKEN:
+        return jsonify(error="unauthorized"), 401
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify(error="No file uploaded (multipart field 'file')"), 400
+    ext = os.path.splitext(f.filename)[1].lower()
+    if ext not in (".pdf", ".docx", ".pptx"):
+        return jsonify(error="Only .pdf, .docx and .pptx are supported"), 400
+    inp, outdir = _save_upload(f, "pii_api_")
+    ner = request.form.get("ner", "en_core_web_sm")
+    r = subprocess.run(_pipeline_cmd(inp, outdir, ner), capture_output=True, text=True)
+    if r.returncode != 0:
+        return jsonify(error="Pipeline failed", log=(r.stderr or r.stdout)[-2000:]), 500
+    res = _build_result(outdir, f.filename)
+    res["gate_passed"] = res["residual"] == 0
+    res["masked_download"] = "/download/" + res["sid"]
+    res["inventory_download"] = "/download/" + res["sid"] + "/inventory"
+    return jsonify(res)
+
+
 if __name__ == "__main__":
-    print("PII Gate UI -> open http://127.0.0.1:5000  (Ctrl+C to stop)")
+    print("PII Gate UI  -> open http://127.0.0.1:5000  (Ctrl+C to stop)")
+    print("PII Gate API -> POST http://127.0.0.1:5000/api/v1/redact  (GET /api/v1 for usage)")
     app.run(host="127.0.0.1", port=5000, debug=False)

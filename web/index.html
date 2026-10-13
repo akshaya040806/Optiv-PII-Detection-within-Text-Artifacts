@@ -8,115 +8,155 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="logo"></span> PII Detection &amp; Redaction Gate</div>
-    <div class="sub">Strip personal data from any document — and prove nothing leaked — before it reaches an AI model.</div>
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <div class="brand-text">
+        <div class="brand-name">PII Detection &amp; Redaction Gate</div>
+        <div class="brand-sub">Strip personal data from any document — and prove nothing leaked — before it reaches an AI model.</div>
+      </div>
+    </div>
+    <div class="top-badges">
+      <span class="badge badge-live" title="Nothing leaves this machine"><span class="dot"></span> Runs fully offline</span>
+    </div>
   </header>
 
-  <div class="layout">
+  <div class="shell">
     <!-- ───────── filter + review sidebar ───────── -->
-    <aside class="sidebar">
-      <h4>Filters &amp; review</h4>
+    <aside class="sidebar" aria-label="Filters and review controls">
+      <div class="side-head">Filters &amp; review</div>
       <p class="side-pre" id="sidePre">Run a scan to filter findings and build a human-review queue.</p>
 
       <div class="side-controls hidden" id="sideControls">
-        <div class="fgroup">
-          <label class="flabel">Search</label>
-          <input type="search" id="searchBox" class="search" placeholder="token, rule, location…" />
+        <div class="field">
+          <label class="field-label" for="searchBox">Search</label>
+          <input type="search" id="searchBox" class="input" placeholder="token, rule, location…" />
         </div>
 
-        <div class="fgroup">
-          <label class="flabel">Confidence threshold <span class="fval" id="confVal">0.80</span></label>
-          <input type="range" id="confSlider" min="0.5" max="1" step="0.05" value="0.8" />
-          <p class="fhelp">Report shows findings <b>&ge; threshold</b>. Anything below drops into the
-            review queue. Set a per-category override below to tune individual categories.</p>
+        <div class="field">
+          <label class="field-label" for="confSlider">Confidence threshold <span class="field-val" id="confVal">0.80</span></label>
+          <input type="range" id="confSlider" class="range" min="0.5" max="1" step="0.05" value="0.8" />
+          <p class="field-help">Report shows findings <b>&ge; threshold</b>; anything below drops to the review queue. Override per category below.</p>
         </div>
 
-        <div class="fgroup">
-          <label class="flabel">Sensitivity tier</label>
-          <label class="chk"><input type="checkbox" class="tierChk" value="Critical" checked /> Critical</label>
-          <label class="chk"><input type="checkbox" class="tierChk" value="High" checked /> High</label>
-          <label class="chk"><input type="checkbox" class="tierChk" value="Medium" checked /> Medium</label>
+        <div class="field">
+          <span class="field-label">Sensitivity tier</span>
+          <div class="chk-row">
+            <label class="chk"><input type="checkbox" class="tierChk" value="Critical" checked /> <span class="dot-tier crit"></span> Critical</label>
+            <label class="chk"><input type="checkbox" class="tierChk" value="High" checked /> <span class="dot-tier high"></span> High</label>
+            <label class="chk"><input type="checkbox" class="tierChk" value="Medium" checked /> <span class="dot-tier med"></span> Medium</label>
+          </div>
         </div>
 
-        <div class="fgroup">
-          <label class="flabel">Category <span class="fhint">· override threshold</span></label>
+        <div class="field">
+          <span class="field-label">Category <span class="field-hint">· override threshold</span></span>
           <div id="catList" class="catlist"></div>
         </div>
 
-        <div class="fgroup">
+        <div class="field">
           <label class="chk strong"><input type="checkbox" id="reviewToggle" checked /> Human-review labeling</label>
-          <p class="fhelp">Confirm or reject low-confidence findings to build a human-labeled gold set.
-            Keys: <b>A</b> confirm · <b>R</b> reject · <b>&uarr;/&darr;</b> move.</p>
+          <p class="field-help">Confirm / reject low-confidence findings to build a human-labeled gold set.
+            <br><kbd>A</kbd> confirm · <kbd>R</kbd> reject · <kbd>↑</kbd><kbd>↓</kbd> move</p>
         </div>
 
-        <button class="btn ghost block" id="resetFilters">Reset filters</button>
-        <button class="btn ghost block" id="clearSaved">Clear saved session</button>
+        <div class="side-actions">
+          <button class="btn subtle" id="resetFilters">Reset filters</button>
+          <button class="btn subtle" id="clearSaved">Clear session</button>
+        </div>
       </div>
     </aside>
 
-    <main class="container">
-      <section class="card">
-        <div id="dropzone" class="dropzone">
-          <input type="file" id="fileInput" accept=".pdf,.docx,.pptx" hidden />
-          <div class="dz-icon">&#8679;</div>
-          <p class="dz-text">Drop a <b>PDF</b>, <b>Word</b> or <b>PowerPoint</b> file here<br />or <span class="link">browse</span></p>
+    <main class="main">
+      <!-- upload / hero -->
+      <section class="panel hero" id="uploadPanel">
+        <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Upload one or more documents">
+          <input type="file" id="fileInput" accept=".pdf,.docx,.pptx" multiple hidden />
+          <div class="dz-icon" aria-hidden="true">&#8679;</div>
+          <p class="dz-text">Drop one or many <b>PDF</b>, <b>Word</b> or <b>PowerPoint</b> files here<br />or <span class="link">browse</span></p>
           <p class="dz-file" id="fileName"></p>
         </div>
         <div class="controls">
-          <label class="sel">Name model
+          <label class="select">Name model
             <select id="ner">
               <option value="en_core_web_sm">Fast (sm)</option>
               <option value="en_core_web_trf">Stronger (trf)</option>
             </select>
           </label>
-          <button id="scanBtn" class="btn" disabled>Scan &amp; Redact</button>
+          <button id="scanBtn" class="btn primary" disabled>Scan &amp; Redact</button>
         </div>
         <p class="hint">PDFs are OCR'd page-by-page and can take a few minutes. Office files are quick.</p>
       </section>
 
-      <section id="loading" class="card center hidden">
-        <div class="atom">
-          <div class="orbit o1"><div class="spin"><span class="el"></span></div></div>
-          <div class="orbit o2"><div class="spin"><span class="el"></span></div></div>
-          <div class="orbit o3"><div class="spin"><span class="el"></span></div></div>
-          <div class="nucleus"></div>
+      <!-- scan progress stepper -->
+      <section class="panel loading hidden" id="loading" aria-live="polite">
+        <div class="stepper" id="stepper">
+          <div class="step" data-s="0"><span class="step-dot"></span><span class="step-name">Extract</span></div>
+          <div class="step-line"></div>
+          <div class="step" data-s="1"><span class="step-dot"></span><span class="step-name">Detect</span></div>
+          <div class="step-line"></div>
+          <div class="step" data-s="2"><span class="step-dot"></span><span class="step-name">Redact</span></div>
+          <div class="step-line"></div>
+          <div class="step" data-s="3"><span class="step-dot"></span><span class="step-name">Verify</span></div>
         </div>
-        <p id="loadingText">Extracting &rarr; detecting &rarr; redacting &rarr; verifying&hellip;</p>
-        <p id="loadingStage" class="stageline"></p>
+        <p class="load-title" id="loadingText">Extracting → detecting → redacting → verifying…</p>
+        <p class="stage-live" id="loadingStage"></p>
       </section>
 
-      <section id="errorBox" class="card error hidden"></section>
+      <section class="panel error hidden" id="errorBox"></section>
 
+      <!-- batch / portfolio dashboard -->
+      <section id="portfolio" class="hidden">
+        <div id="batchBanner" class="banner"></div>
+        <div class="pf-kpis" id="pfKpis"></div>
+        <div class="panel">
+          <div class="panel-head"><h3>Documents by risk</h3><span class="panel-tag">worst offenders first · click a row to open it</span></div>
+          <div class="table-wrap">
+            <table id="portfolioTable">
+              <thead><tr><th>Document</th><th>Findings</th><th>Critical</th><th>High</th><th>Medium</th><th>Risk</th><th>Gate</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- results -->
       <section id="results" class="hidden">
         <div id="gateBanner" class="banner"></div>
 
-        <div class="metrics">
-          <div class="metric risk" id="riskCard"><div class="m-num" id="mRisk">0</div><div class="m-lbl">weighted risk</div></div>
-          <div class="metric"><div class="m-num" id="mFindings">0</div><div class="m-lbl">cleared findings</div></div>
-          <div class="metric"><div class="m-num" id="mPeople">0</div><div class="m-lbl">unique people</div></div>
-          <div class="metric"><div class="m-num" id="mSealed">0</div><div class="m-lbl">regions sealed</div></div>
-          <div class="metric"><div class="m-num" id="mResidual">0</div><div class="m-lbl">residual leaks</div></div>
+        <div class="kpi-row">
+          <div class="kpi kpi-risk" id="riskCard">
+            <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+              <circle class="ring-bg" cx="60" cy="60" r="52"></circle>
+              <circle class="ring-fg" id="riskRing" cx="60" cy="60" r="52"></circle>
+            </svg>
+            <div class="ring-center"><div class="ring-num" id="mRisk">0</div><div class="ring-lbl" id="riskLvl">risk</div></div>
+            <div class="kpi-cap">weighted risk score</div>
+          </div>
+          <div class="kpi-grid">
+            <div class="kpi"><div class="kpi-num" id="mFindings">0</div><div class="kpi-lbl">cleared findings</div></div>
+            <div class="kpi"><div class="kpi-num" id="mPeople">0</div><div class="kpi-lbl">unique people</div></div>
+            <div class="kpi"><div class="kpi-num" id="mSealed">0</div><div class="kpi-lbl">regions sealed</div></div>
+            <div class="kpi"><div class="kpi-num ok" id="mResidual">0</div><div class="kpi-lbl">residual leaks</div></div>
+          </div>
         </div>
         <p class="summary" id="summary"></p>
 
         <div class="grid2">
-          <div class="card">
-            <h3>What we found <span class="muted">&mdash; above threshold</span></h3>
+          <div class="panel">
+            <div class="panel-head"><h3>What we found</h3><span class="panel-tag">above threshold</span></div>
             <div id="chart" class="chart"></div>
             <div id="tiers" class="tiers"></div>
           </div>
-          <div class="card">
-            <h3>Download</h3>
-            <a id="dlMasked" class="btn block" href="#">&#8595; Download redacted file</a>
-            <a id="dlInv" class="btn ghost block" href="#">&#8595; Download full PII inventory (CSV)</a>
-            <a id="exportFiltered" class="btn ghost block" href="#">&#8595; Export filtered findings (CSV)</a>
-            <p class="note">The redacted file is safe to send to an LLM. The re-identification key stays
-              server-side and is never downloadable &mdash; by design.</p>
+          <div class="panel">
+            <div class="panel-head"><h3>Export &amp; download</h3></div>
+            <a id="dlMasked" class="btn primary block" href="#">&#8595; Redacted file</a>
+            <a id="dlInv" class="btn subtle block" href="#">&#8595; Full PII inventory (CSV)</a>
+            <a id="exportFiltered" class="btn subtle block" href="#">&#8595; Filtered findings (CSV)</a>
+            <p class="note">The redacted file is safe to send to an LLM. The re-identification key stays server-side and is never downloadable — by design.</p>
           </div>
         </div>
 
-        <div class="card">
-          <h3>Audit trail <span class="muted">&mdash; tokens only · click a row for masked context</span></h3>
+        <div class="panel">
+          <div class="panel-head"><h3>Audit trail</h3><span class="panel-tag">tokens only · click a row for masked context</span></div>
           <div class="table-wrap">
             <table id="auditTable">
               <thead><tr><th>Category</th><th>Tier</th><th>Token</th><th>Rule</th><th>Location</th><th>Conf.</th></tr></thead>
@@ -125,9 +165,12 @@
           </div>
         </div>
 
-        <div class="card" id="queueCard">
-          <h3>Human review queue <span class="muted" id="queueSub">&mdash; low-confidence findings</span>
-            <a class="btn ghost mini" id="exportLabels" href="#">&#8595; Export reviewed labels (CSV)</a></h3>
+        <div class="panel" id="queueCard">
+          <div class="panel-head">
+            <h3>Human review queue</h3>
+            <span class="panel-tag" id="queueSub">low-confidence findings</span>
+            <a class="btn subtle mini" id="exportLabels" href="#">&#8595; Export labels (CSV)</a>
+          </div>
           <div class="table-wrap">
             <table id="queueTable">
               <thead><tr><th>Category</th><th>Tier</th><th>Token</th><th>Rule</th><th>Location</th><th>Conf.</th><th>Decision</th></tr></thead>
@@ -139,7 +182,7 @@
     </main>
   </div>
 
-  <footer class="foot">Optiv VIT Case Study 2 &middot; runs fully offline &middot; hybrid detection + fail-closed sealing + independent verification</footer>
+  <footer class="foot">Optiv VIT Case Study 2 · runs fully offline · hybrid detection + fail-closed sealing + independent verification</footer>
   <script src="app.js"></script>
 </body>
 </html>
