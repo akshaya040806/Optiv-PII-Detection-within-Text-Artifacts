@@ -7,6 +7,7 @@ Run:  python server.py   then open http://127.0.0.1:5000
 """
 import csv
 import glob
+import io
 import json
 import os
 import re
@@ -145,6 +146,7 @@ def api_usage():
         offline=True,
         endpoints={
             "POST /api/v1/redact": "multipart form field 'file' (.pdf/.docx/.pptx) -> masked output + tokens-only inventory JSON",
+            "POST /api/v1/report": "JSON {title, source, findings[]} (tokens only) -> a PDF report (e.g. human-rejected findings)",
             "GET /api/v1/health": "liveness check",
             "GET /download/<sid>": "download the redacted file",
             "GET /download/<sid>/inventory": "download the full inventory CSV",
@@ -178,6 +180,59 @@ def api_redact():
     res["masked_download"] = "/download/" + res["sid"]
     res["inventory_download"] = "/download/" + res["sid"] + "/inventory"
     return jsonify(res)
+
+
+def _build_rejected_pdf(buf, title, source, findings):
+    """Tokens-only PDF of findings a human rejected as Not PII (false positives), for audit/retraining."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import landscape, letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, LongTable, TableStyle
+    NAVY, ORANGE, INK, LINE = (colors.HexColor(c) for c in ("#0f2140", "#c8501f", "#1d2733", "#d6deea"))
+    ss = getSampleStyleSheet()
+    cell = ParagraphStyle("c", parent=ss["Normal"], fontSize=7, leading=9, textColor=INK)
+    tok = ParagraphStyle("t", parent=cell, textColor=ORANGE, fontName="Helvetica-Bold")
+    head = ParagraphStyle("h", parent=cell, fontSize=7.5, textColor=colors.white, fontName="Helvetica-Bold")
+    esc = lambda s: (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    doc = SimpleDocTemplate(buf, pagesize=landscape(letter), topMargin=44, bottomMargin=36,
+                            leftMargin=30, rightMargin=30, title=title)
+    st = [Paragraph(title, ParagraphStyle("ti", parent=ss["Title"], fontSize=18, textColor=NAVY)),
+          Paragraph(f"{len(findings)} finding(s) rejected as Not PII during human review"
+                    + (f" · source: {esc(source)}" if source else "") + " · tokens only, no raw PII",
+                    ParagraphStyle("su", parent=cell, fontSize=9, textColor=ORANGE, spaceAfter=10))]
+    if not findings:
+        st.append(Paragraph("No rejected findings.", cell))
+    else:
+        cols = ["#", "Token", "Category", "Tier", "Location", "Conf", "Rule", "Context (masked)"]
+        widths = [22, 82, 82, 40, 82, 30, 150, 224]
+        data = [[Paragraph(c, head) for c in cols]]
+        for i, f in enumerate(findings, 1):
+            data.append([Paragraph(str(i), cell), Paragraph(esc(f.get("token")), tok),
+                         Paragraph(esc(f.get("category")), cell), Paragraph(esc(f.get("tier")), cell),
+                         Paragraph(esc(f.get("location")), cell), Paragraph(esc(f.get("confidence")), cell),
+                         Paragraph(esc(f.get("rule")), cell), Paragraph(esc(f.get("snippet")), cell)])
+        t = LongTable(data, colWidths=widths, repeatRows=1)
+        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), NAVY), ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+                               ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 3),
+                               ("BOTTOMPADDING", (0, 0), (-1, -1), 3), ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                               ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                               ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f6fb")])]))
+        st.append(t)
+    doc.build(st)
+
+
+@app.post("/api/v1/report")
+def api_report():
+    if API_TOKEN and request.headers.get("X-API-Token") != API_TOKEN:
+        return jsonify(error="unauthorized"), 401
+    data = request.get_json(silent=True) or {}
+    buf = io.BytesIO()
+    try:
+        _build_rejected_pdf(buf, data.get("title", "Rejected Findings"), data.get("source", ""), data.get("findings", []))
+    except ImportError:
+        return jsonify(error="reportlab not installed (pip install reportlab)"), 500
+    buf.seek(0)
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name="rejected_findings.pdf")
 
 
 if __name__ == "__main__":

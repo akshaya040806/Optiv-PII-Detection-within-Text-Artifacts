@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { CheckCircle, XCircle, Download } from "lucide-react"
+import { CheckCircle, XCircle, Download, FileText } from "lucide-react"
 import type { ScanData } from "../page"
 
 type Props = {
@@ -69,6 +69,42 @@ export default function IntelligencePage({ scanData, reviews, setReviews }: Prop
     exportCsv(rows, "human_review_labels.csv")
   }
 
+  // Rejected (Not-PII) findings -> a tokens-only PDF report, generated server-side via reportlab.
+  async function downloadRejectedReport() {
+    const rows = scanData!.audit.filter((r) => reviews[r._id] === "rejected")
+    if (!rows.length) {
+      alert("No findings have been rejected yet. Mark some as 'Not PII' first.")
+      return
+    }
+    try {
+      const res = await fetch("/api/v1/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Rejected Findings — flagged Not PII by human review",
+          source: scanData!.filename,
+          findings: rows.map((r) => ({
+            token: r.token, category: r.category, tier: r.tier,
+            location: r.location, confidence: r._conf.toFixed(2), rule: r.rule, snippet: r.snippet,
+          })),
+        }),
+      })
+      if (!res.ok) {
+        alert("Report generation failed (" + res.status + ").")
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = "rejected_findings.pdf"
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      alert("Report request failed: " + e.message)
+    }
+  }
+
   // keyboard navigation: ↑/↓ move, A confirm, R reject
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -102,6 +138,7 @@ export default function IntelligencePage({ scanData, reviews, setReviews }: Prop
   const pending = queue.filter((r) => !reviews[r._id]).length
   const confirmed = queue.filter((r) => reviews[r._id] === "confirmed").length
   const rejected = queue.filter((r) => reviews[r._id] === "rejected").length
+  const rejectedTotal = scanData.audit.filter((r) => reviews[r._id] === "rejected").length
 
   return (
     <div className="p-6 space-y-6">
@@ -110,14 +147,25 @@ export default function IntelligencePage({ scanData, reviews, setReviews }: Prop
           <h1 className="text-2xl font-bold text-white tracking-wider">REVIEW QUEUE</h1>
           <p className="text-sm text-neutral-400">Human-in-the-loop labeling for low-confidence findings</p>
         </div>
-        <Button
-          onClick={exportLabels}
-          variant="outline"
-          className="border-neutral-700 text-neutral-300 bg-transparent hover:bg-neutral-800 text-sm"
-        >
-          <Download className="w-4 h-4 mr-2" />
-          Export Labels (CSV)
-        </Button>
+        <div className="flex gap-3">
+          <Button
+            onClick={exportLabels}
+            variant="outline"
+            className="border-neutral-700 text-neutral-300 bg-transparent hover:bg-neutral-800 text-sm"
+          >
+            <Download className="w-4 h-4 mr-2" />
+            Export Labels (CSV)
+          </Button>
+          <Button
+            onClick={downloadRejectedReport}
+            disabled={rejectedTotal === 0}
+            variant="outline"
+            className="border-red-900 text-red-400 bg-transparent hover:bg-red-950 text-sm disabled:opacity-40"
+          >
+            <FileText className="w-4 h-4 mr-2" />
+            Rejected Report (PDF)
+          </Button>
+        </div>
       </div>
 
       {/* Threshold + stats */}

@@ -80,6 +80,7 @@ export default function TacticalDashboard() {
     if (typeof window !== "undefined" && window.location.search.includes("demo")) {
       setScanData(DEMO_SCAN)
       setScanStatus("done")
+      setReviews({ "1": "confirmed", "4": "rejected" }) // show a confirmed + a rejected example
       return
     }
     try {
@@ -257,6 +258,7 @@ export default function TacticalDashboard() {
               setStageLog={setStageLog}
               currentStep={currentStep}
               setCurrentStep={setCurrentStep}
+              reviews={reviews}
             />
           )}
           {activeSection === "agents" && <AgentNetworkPage scanData={scanData} reviews={reviews} />}

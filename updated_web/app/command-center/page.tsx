@@ -15,6 +15,7 @@ type Props = {
   setStageLog: (fn: (prev: string[]) => string[]) => void
   currentStep: number
   setCurrentStep: (n: number) => void
+  reviews: Record<string, string>
 }
 
 const STEPS = ["EXTRACT", "DETECT", "REDACT", "VERIFY"]
@@ -29,6 +30,7 @@ export default function CommandCenterPage({
   setStageLog,
   currentStep,
   setCurrentStep,
+  reviews,
 }: Props) {
   const [chosen, setChosen] = useState<File | null>(null)
   const [ner, setNer] = useState("en_core_web_sm")
@@ -140,6 +142,7 @@ export default function CommandCenterPage({
   const recent = [...audit]
     .sort((a, b) => (RISK_W[b.tier] || 0) - (RISK_W[a.tier] || 0) || b._conf - a._conf)
     .slice(0, 14)
+  const confirmedRows = audit.filter((r) => reviews[r._id] === "confirmed")
   const tierColor = (t: string) => (t === "Critical" ? "text-red-500" : t === "High" ? "text-orange-500" : "text-neutral-300")
 
   const Panel = ({ title, children, className = "" }: any) => (
@@ -255,18 +258,34 @@ export default function CommandCenterPage({
           ) : <Awaiting />}
         </Panel>
 
-        {/* Detection log (recent findings feed) */}
+        {/* Detection log (human-confirmed first, then recent findings feed) */}
         <Panel title="DETECTION LOG">
           <div className="max-h-[260px] overflow-y-auto space-y-3">
-            {has ? recent.map((r) => (
-              <div key={r._id} className="border-l-2 border-orange-500/40 pl-3">
-                <div className="text-xs text-neutral-500 font-mono">{r.location} · conf {r._conf.toFixed(2)}</div>
-                <div className="text-sm text-neutral-300">
-                  <span className={`font-mono font-bold ${tierColor(r.tier)}`}>{r.category}</span>{" "}
-                  masked as <span className="text-orange-500 font-mono">{r.token}</span>
-                </div>
-              </div>
-            )) : <Awaiting />}
+            {has ? (
+              <>
+                {confirmedRows.map((r) => (
+                  <div key={"c" + r._id} className="border-l-2 border-green-500/70 pl-3">
+                    <div className="text-xs font-mono">
+                      <span className="text-green-500">✓ HUMAN-CONFIRMED</span>
+                      <span className="text-neutral-500"> · {r.location} · conf {r._conf.toFixed(2)}</span>
+                    </div>
+                    <div className="text-sm text-neutral-300">
+                      <span className={`font-mono font-bold ${tierColor(r.tier)}`}>{r.category}</span>{" "}
+                      masked as <span className="text-orange-500 font-mono">{r.token}</span>
+                    </div>
+                  </div>
+                ))}
+                {recent.filter((r) => reviews[r._id] !== "confirmed").map((r) => (
+                  <div key={r._id} className="border-l-2 border-orange-500/40 pl-3">
+                    <div className="text-xs text-neutral-500 font-mono">{r.location} · conf {r._conf.toFixed(2)}</div>
+                    <div className="text-sm text-neutral-300">
+                      <span className={`font-mono font-bold ${tierColor(r.tier)}`}>{r.category}</span>{" "}
+                      masked as <span className="text-orange-500 font-mono">{r.token}</span>
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : <Awaiting />}
           </div>
         </Panel>
 
