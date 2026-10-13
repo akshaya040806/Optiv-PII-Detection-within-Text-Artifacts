@@ -378,7 +378,7 @@ def extract_pdf():
 
 
 def extract_docx():
-    segs = []
+    segs, img_ocr = [], []
     d = Document(DOCX)
     for n, p in enumerate(d.paragraphs):
         if p.text.strip():
@@ -408,15 +408,16 @@ def extract_docx():
             open(p, "wb").write(z.read(name))
             ws = tsv_words(ocr_tsv(p))
             ac = avg_conf(ws)
+            img_ocr.append(dict(artifact=A_DOCX, image=os.path.basename(name), ocr_conf=ac, words=len(ws)))
             for text, idx in group_paras(ws):
                 sg = Seg(A_DOCX, os.path.basename(name), "image", text, "ocr", idx, image=name)
                 sg.ocr_conf = ac
                 segs.append(sg)
-    return segs
+    return segs, img_ocr
 
 
 def extract_pptx():
-    segs = []
+    segs, img_ocr = [], []
     pr = Presentation(PPTX)
     for i, s in enumerate(pr.slides, 1):
         for sh in s.shapes:
@@ -446,11 +447,12 @@ def extract_pptx():
             open(p, "wb").write(z.read(name))
             ws = tsv_words(ocr_tsv(p))
             ac = avg_conf(ws)
+            img_ocr.append(dict(artifact=A_PPTX, image=os.path.basename(name), ocr_conf=ac, words=len(ws)))
             for text, idx in group_paras(ws):
                 sg = Seg(A_PPTX, os.path.basename(name), "image", text, "ocr", idx, image=name)
                 sg.ocr_conf = ac
                 segs.append(sg)
-    return segs
+    return segs, img_ocr
 
 
 def detect_all(segs):
@@ -839,17 +841,17 @@ if __name__ == "__main__":
     cache_key = (PDF, DOCX, PPTX)
     saved = pickle.load(open(cache, "rb")) if os.path.exists(cache) else None
     if isinstance(saved, dict) and saved.get("key") == cache_key:
-        pdf_segs, pages_meta, pdf_native_chars, docx_segs, pptx_segs = saved["data"]
+        pdf_segs, pages_meta, pdf_native_chars, docx_segs, pptx_segs, docx_img_ocr, pptx_img_ocr = saved["data"]
     else:
         pdf_segs, pages_meta, pdf_native_chars = extract_pdf() if PDF else ([], [], 0)
         if DOCX:
             print("  reading Word file and its screenshots…", flush=True)
-            docx_segs = extract_docx()
+            docx_segs, docx_img_ocr = extract_docx()
         else:
-            docx_segs = []
-        pptx_segs = extract_pptx() if PPTX else []
-        pickle.dump({"key": cache_key, "data": (pdf_segs, pages_meta, pdf_native_chars, docx_segs, pptx_segs)},
-                    open(cache, "wb"))
+            docx_segs, docx_img_ocr = [], []
+        pptx_segs, pptx_img_ocr = extract_pptx() if PPTX else ([], [])
+        pickle.dump({"key": cache_key, "data": (pdf_segs, pages_meta, pdf_native_chars, docx_segs, pptx_segs,
+                                                docx_img_ocr, pptx_img_ocr)}, open(cache, "wb"))
     with open(os.path.join(WORK, "all_text.txt"), "w", encoding="utf-8") as f_:
         f_.write("\n".join(s.text for s in pdf_segs + docx_segs + pptx_segs))
     segs = pdf_segs + docx_segs + pptx_segs
@@ -924,13 +926,8 @@ if __name__ == "__main__":
         print(f"  note: {len(uninspected_media)} embedded vector media (EMF/SVG/WMF) flagged for manual review "
               f"(cannot OCR to verify)", flush=True)
 
-    # per-image OCR confidence for embedded (DOCX/PPTX) images, for the UI's OCR-quality view
-    image_ocr, seen_io = [], set()
-    for s in docx_segs + pptx_segs:
-        ac = getattr(s, "ocr_conf", None)
-        if s.image and ac is not None and (s.artifact, s.image) not in seen_io:
-            seen_io.add((s.artifact, s.image))
-            image_ocr.append(dict(artifact=s.artifact, image=os.path.basename(s.image), ocr_conf=ac))
+    # per-image OCR confidence for EVERY embedded (DOCX/PPTX) image (incl. images OCR found no text in)
+    image_ocr = docx_img_ocr + pptx_img_ocr
 
     residual_leaks = leakage_gate(rows)
     if residual_leaks:

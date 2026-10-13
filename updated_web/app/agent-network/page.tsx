@@ -210,9 +210,9 @@ export default function AgentNetworkPage({ scanData, reviews }: Props) {
       </Card>
 
       {/* Custom watchword search */}
-      <Card className="bg-neutral-900 border-neutral-700">
+      <Card className="bg-neutral-900 border-orange-500/60 ring-1 ring-orange-500/20">
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs text-neutral-400 tracking-wider">CUSTOM PII · WATCHWORD SEARCH</CardTitle>
+          <CardTitle className="text-sm text-orange-400 tracking-wider">+ CUSTOM PII · WATCHWORD SEARCH</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-xs text-neutral-500 font-mono">

@@ -25,7 +25,7 @@ export type AuditRow = {
 export type GoldItem = { page: number; context: string; category: string; found: boolean }
 export type OcrData = {
   pages: { page: number; ocr_conf: number }[]
-  images: { artifact: string; image: string; ocr_conf: number }[]
+  images: { artifact: string; image: string; ocr_conf: number | null }[]
 }
 export type ScanData = {
   sid: string
@@ -97,6 +97,7 @@ const DEMO_SCAN: ScanData = {
       { artifact: "TPRM Training (DOCX)", image: "image7.png", ocr_conf: 96.4 },
       { artifact: "TPRM Training (DOCX)", image: "image20.png", ocr_conf: 65.0 },
       { artifact: "TPRM Training (DOCX)", image: "image31.png", ocr_conf: 55.5 },
+      { artifact: "TPRM Training (DOCX)", image: "image3.png", ocr_conf: null },
       { artifact: "Org Pack (PPTX)", image: "image1.png", ocr_conf: 96.4 },
     ],
   },

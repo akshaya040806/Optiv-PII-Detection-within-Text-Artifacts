@@ -146,11 +146,15 @@ export default function PageMapPage({ scanData }: { scanData: ScanData | null })
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
               {[...ocrImages]
-                .sort((a, b) => a.ocr_conf - b.ocr_conf)
+                .sort((a, b) => (a.ocr_conf ?? -1) - (b.ocr_conf ?? -1))
                 .map((im, i) => (
                   <div key={i} className="bg-neutral-800 rounded p-2 border border-neutral-700">
                     <div className="text-[10px] text-neutral-400 font-mono truncate" title={im.image}>{im.image}</div>
-                    <div className={`text-lg font-bold font-mono ${confColor(im.ocr_conf)}`}>{im.ocr_conf}%</div>
+                    {im.ocr_conf == null ? (
+                      <div className="text-sm font-bold font-mono text-neutral-500">no text</div>
+                    ) : (
+                      <div className={`text-lg font-bold font-mono ${confColor(im.ocr_conf)}`}>{im.ocr_conf}%</div>
+                    )}
                     <div className="text-[9px] text-neutral-600 truncate">{im.artifact}</div>
                   </div>
                 ))}
