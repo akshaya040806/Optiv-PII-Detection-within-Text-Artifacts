@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Download } from "lucide-react"
+import { Download, CheckCircle, XCircle } from "lucide-react"
 import type { ScanData } from "../page"
 
 type Props = { scanData: ScanData | null }
@@ -138,6 +138,42 @@ export default function OperationsPage({ scanData }: Props) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Gold-set benchmark (Cadence policy PDF only) */}
+      {scanData.gold && scanData.gold_recall && (
+        <Card className="bg-neutral-900 border-neutral-700">
+          <CardHeader>
+            <CardTitle className="text-xs text-neutral-400 tracking-wider">
+              GOLD-SET BENCHMARK · {scanData.gold_recall[0]}/{scanData.gold_recall[1]} recall ({scanData.gold_recall[2]}%)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-neutral-500 mb-3 font-mono">
+              Detections vs a hand-verified ground-truth set — ✓ detected, ✗ missed (still covered by fail-closed sealing). Tokens only, no raw gold values.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+              {scanData.gold.map((g, i) => (
+                <div
+                  key={i}
+                  className={`rounded p-2 border flex items-center gap-2 ${
+                    g.found ? "bg-neutral-800 border-neutral-700" : "bg-red-950/40 border-red-900"
+                  }`}
+                >
+                  {g.found ? (
+                    <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />
+                  ) : (
+                    <XCircle className="w-4 h-4 text-red-400 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-xs font-mono text-neutral-200 truncate">{g.category}</div>
+                    <div className="text-[10px] text-neutral-500 font-mono">p.{g.page} · {g.context}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Exports */}
       <Card className="bg-neutral-900 border-neutral-700">

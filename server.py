@@ -48,7 +48,7 @@ def _build_result(outdir, filename):
     masked = next((p for p in outdir.glob("*_MASKED.*")), None)
     sid = uuid.uuid4().hex
     SESSIONS[sid] = {"outdir": outdir, "masked": str(masked) if masked else None}
-    return dict(
+    res = dict(
         sid=sid, filename=filename,
         masked_name=(masked.name if masked else None),
         findings=len(rows),
@@ -60,6 +60,23 @@ def _build_result(outdir, filename):
                 "snippet": _mask_snippet(x.get("snippet", ""), x.get("value", ""), x["token"])}
                for x in rows],
     )
+    # gold-set comparison (tokens-only: category/page/found, NO raw gold values) — Cadence policy PDF only
+    gr = metrics.get("gold_recall_overall")
+    if isinstance(gr, list):
+        res["gold_recall"] = gr
+        res["gold"] = [{"page": g["page"], "context": g["context"], "category": g["category"], "found": g["found"]}
+                       for g in metrics.get("gold", [])]
+    # per-page / per-image OCR confidence (from run_meta)
+    try:
+        rm = json.load(open(outdir / "run_meta.json", encoding="utf-8"))
+        res["ocr"] = {
+            "pages": [{"page": p["page"], "ocr_conf": p.get("ocr_conf")}
+                      for p in rm.get("pages", []) if p.get("ocr_conf") is not None],
+            "images": rm.get("image_ocr", []),
+        }
+    except Exception:
+        pass
+    return res
 
 
 API_TOKEN = os.environ.get("PII_API_TOKEN")   # optional: if set, /api requires an X-API-Token header
@@ -158,6 +175,26 @@ def api_usage():
 @app.get("/api/v1/health")
 def api_health():
     return jsonify(status="ok", offline=True)
+
+
+@app.post("/api/v1/find")
+def api_find():
+    """Custom watchword: count occurrences of a user term in the scanned document text (server-side)."""
+    if API_TOKEN and request.headers.get("X-API-Token") != API_TOKEN:
+        return jsonify(error="unauthorized"), 401
+    data = request.get_json(silent=True) or {}
+    term = (data.get("term") or "").strip()
+    s = SESSIONS.get(data.get("sid"))
+    if not term:
+        return jsonify(error="empty term"), 400
+    if not s:
+        return jsonify(error="unknown or expired session"), 404
+    txt = Path(s["outdir"]) / "_work" / "all_text.txt"
+    if not txt.exists():
+        return jsonify(error="document text unavailable for this session"), 404
+    text = txt.read_text(encoding="utf-8", errors="replace")
+    count = len(re.findall(re.escape(term), text, re.IGNORECASE))
+    return jsonify(term=term, count=count)
 
 
 @app.post("/api/v1/redact")

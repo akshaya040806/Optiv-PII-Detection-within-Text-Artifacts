@@ -32,21 +32,29 @@ export default function PageMapPage({ scanData }: { scanData: ScanData | null })
     )
   }
 
+  const ocrPages = new Map((scanData.ocr?.pages ?? []).map((p) => [p.page, p.ocr_conf]))
+  const ocrImages = scanData.ocr?.images ?? []
+  const confColor = (c: number) => (c >= 90 ? "text-green-400" : c >= 75 ? "text-orange-400" : "text-red-400")
+
   const groups: Record<string, { order: number; items: AuditRow[] }> = {}
   scanData.audit.forEach((r) => {
     const { key, order } = pageInfo(r.location)
     ;(groups[key] ??= { order, items: [] }).items.push(r)
   })
   const pages = Object.entries(groups)
-    .map(([key, v]) => ({
-      key,
-      order: v.order,
-      items: v.items,
-      count: v.items.length,
-      crit: v.items.filter((r) => r.tier === "Critical").length,
-      high: v.items.filter((r) => r.tier === "High").length,
-      risk: v.items.reduce((s, r) => s + (RISK_W[r.tier] || 0), 0),
-    }))
+    .map(([key, v]) => {
+      const pn = key.match(/^Page (\d+)/)
+      return {
+        key,
+        order: v.order,
+        items: v.items,
+        count: v.items.length,
+        crit: v.items.filter((r) => r.tier === "Critical").length,
+        high: v.items.filter((r) => r.tier === "High").length,
+        risk: v.items.reduce((s, r) => s + (RISK_W[r.tier] || 0), 0),
+        ocr: pn ? ocrPages.get(Number(pn[1])) : undefined,
+      }
+    })
     .sort((a, b) => a.order - b.order)
   const max = Math.max(1, ...pages.map((p) => p.count))
   const selected = pages.find((p) => p.key === sel) ?? pages[0]
@@ -80,6 +88,7 @@ export default function PageMapPage({ scanData }: { scanData: ScanData | null })
                 <div className="text-[10px] font-mono text-neutral-200 tracking-wider truncate">{p.key}</div>
                 <div className="text-xl font-bold font-mono text-white leading-tight">{p.count}</div>
                 {p.crit > 0 && <div className="text-[9px] font-mono text-red-300">{p.crit} crit</div>}
+                {p.ocr != null && <div className={`text-[9px] font-mono ${confColor(p.ocr)}`}>OCR {p.ocr}%</div>}
               </button>
             ))}
           </div>
@@ -119,6 +128,33 @@ export default function PageMapPage({ scanData }: { scanData: ScanData | null })
             <p className="text-[11px] text-neutral-600 font-mono mt-3">
               e.g. "{selected.key}, 3rd PII" = #3 above.
             </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* OCR quality — per scanned image */}
+      {ocrImages.length > 0 && (
+        <Card className="bg-neutral-900 border-neutral-700">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs text-neutral-400 tracking-wider">
+              OCR QUALITY · {ocrImages.length} SCANNED IMAGE(S)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-neutral-500 mb-3 font-mono">
+              Average Tesseract confidence per embedded image — low scores are where fail-closed sealing matters most.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
+              {[...ocrImages]
+                .sort((a, b) => a.ocr_conf - b.ocr_conf)
+                .map((im, i) => (
+                  <div key={i} className="bg-neutral-800 rounded p-2 border border-neutral-700">
+                    <div className="text-[10px] text-neutral-400 font-mono truncate" title={im.image}>{im.image}</div>
+                    <div className={`text-lg font-bold font-mono ${confColor(im.ocr_conf)}`}>{im.ocr_conf}%</div>
+                    <div className="text-[9px] text-neutral-600 truncate">{im.artifact}</div>
+                  </div>
+                ))}
+            </div>
           </CardContent>
         </Card>
       )}

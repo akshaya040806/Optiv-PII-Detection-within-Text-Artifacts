@@ -219,8 +219,15 @@ def tsv_words(tsv_text, ox=0, oy=0, scale=1.0, min_conf=-1):
             continue
         x, y, w, h = (int(r[k]) for k in ("left", "top", "width", "height"))
         words.append(dict(b=int(r["block_num"]), p=int(r["par_num"]), l=int(r["line_num"]), t=r["text"],
+                          conf=float(r["conf"]),
                           box=(ox + x / scale, oy + y / scale, ox + (x + w) / scale, oy + (y + h) / scale)))
     return words
+
+
+def avg_conf(words):
+    """Average Tesseract word confidence (0-100) for a set of OCR words, or None if empty."""
+    cs = [w["conf"] for w in words if w.get("conf", -1) >= 0]
+    return round(sum(cs) / len(cs), 1) if cs else None
 
 
 def group_paras(words):
@@ -359,7 +366,7 @@ def extract_pdf():
         for w in base:
             (base_fig if ctx_for(w["box"], figs) == "image" else base_kept).append(w)
         pages_meta.append(dict(page=i, native_chars=0, ocr_words=len(base), figures=len(figs),
-                               regions=Counter(r[0] for r in regions)))
+                               ocr_conf=avg_conf(base), regions=Counter(r[0] for r in regions)))
         for src_words, method in ((base_kept, "ocr"), (base_fig, "ocr-baseline-figure"),
                                   (enh_words, "ocr-enhanced"), (enh_table_words, "ocr-enhanced")):
             for text, idx in group_paras(src_words):
@@ -400,8 +407,11 @@ def extract_docx():
             p = os.path.join(WORK, f"docx_{os.path.basename(name)}")
             open(p, "wb").write(z.read(name))
             ws = tsv_words(ocr_tsv(p))
+            ac = avg_conf(ws)
             for text, idx in group_paras(ws):
-                segs.append(Seg(A_DOCX, os.path.basename(name), "image", text, "ocr", idx, image=name))
+                sg = Seg(A_DOCX, os.path.basename(name), "image", text, "ocr", idx, image=name)
+                sg.ocr_conf = ac
+                segs.append(sg)
     return segs
 
 
@@ -435,8 +445,11 @@ def extract_pptx():
             p = os.path.join(WORK, f"pptx_{os.path.basename(name)}")
             open(p, "wb").write(z.read(name))
             ws = tsv_words(ocr_tsv(p))
+            ac = avg_conf(ws)
             for text, idx in group_paras(ws):
-                segs.append(Seg(A_PPTX, os.path.basename(name), "image", text, "ocr", idx, image=name))
+                sg = Seg(A_PPTX, os.path.basename(name), "image", text, "ocr", idx, image=name)
+                sg.ocr_conf = ac
+                segs.append(sg)
     return segs
 
 
@@ -911,6 +924,14 @@ if __name__ == "__main__":
         print(f"  note: {len(uninspected_media)} embedded vector media (EMF/SVG/WMF) flagged for manual review "
               f"(cannot OCR to verify)", flush=True)
 
+    # per-image OCR confidence for embedded (DOCX/PPTX) images, for the UI's OCR-quality view
+    image_ocr, seen_io = [], set()
+    for s in docx_segs + pptx_segs:
+        ac = getattr(s, "ocr_conf", None)
+        if s.image and ac is not None and (s.artifact, s.image) not in seen_io:
+            seen_io.add((s.artifact, s.image))
+            image_ocr.append(dict(artifact=s.artifact, image=os.path.basename(s.image), ocr_conf=ac))
+
     residual_leaks = leakage_gate(rows)
     if residual_leaks:
         print(f"  !! LEAKAGE GATE: {len(residual_leaks)} detected PII value(s) still present in masked text:", flush=True)
@@ -920,7 +941,7 @@ if __name__ == "__main__":
         print("  leakage gate PASSED: 0 detected PII values survive in masked DOCX/PPTX text or re-OCR'd PDF", flush=True)
     json.dump(dict(pages=pages_meta, pdf_native_chars=pdf_native_chars, text_chars=text_chars,
                    figure_redactions=fig_redactions, residual_leaks=residual_leaks,
-                   uninspected_media=uninspected_media,
+                   uninspected_media=uninspected_media, image_ocr=image_ocr,
                    base_fig=base_fig_rows, masked=[x for x in (pdf_out, docx_out, pptx_out) if x]),
               open(os.path.join(OUT, "run_meta.json"), "w", encoding="utf-8"), default=str, indent=1)
     print("Stage 4/4  computing metrics…", flush=True)

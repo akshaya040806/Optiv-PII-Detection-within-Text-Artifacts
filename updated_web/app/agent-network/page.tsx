@@ -3,7 +3,8 @@
 import { useState, useEffect, Fragment } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Search } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Search, CheckCircle, XCircle } from "lucide-react"
 import type { ScanData } from "../page"
 
 type Props = {
@@ -19,6 +20,10 @@ export default function AgentNetworkPage({ scanData, reviews }: Props) {
   const [selectedCats, setSelectedCats] = useState<Set<string>>(
     () => new Set(scanData?.audit.map((r) => r.category) ?? []),
   )
+  const [term, setTerm] = useState("")
+  const [finding, setFinding] = useState(false)
+  const [result, setResult] = useState<{ term: string; count: number } | null>(null)
+  const [custom, setCustom] = useState<{ term: string; count: number; decision: string }[]>([])
   // keep the category selection in sync with whatever document is loaded
   useEffect(() => {
     if (scanData) setSelectedCats(new Set(scanData.audit.map((r) => r.category)))
@@ -66,6 +71,37 @@ export default function AgentNetworkPage({ scanData, reviews }: Props) {
       n.has(id) ? n.delete(id) : n.add(id)
       return n
     })
+  }
+
+  // custom watchword: count a user term in the document, then decide to track it or not
+  async function findTerm() {
+    const t = term.trim()
+    if (!t) return
+    setFinding(true)
+    setResult(null)
+    try {
+      const res = await fetch("/api/v1/find", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sid: scanData!.sid, term: t }),
+      })
+      const d = await res.json()
+      if (!res.ok) {
+        alert(d.error || "Find failed")
+        return
+      }
+      setResult({ term: d.term, count: d.count })
+    } catch (e: any) {
+      alert("Request failed: " + e.message)
+    } finally {
+      setFinding(false)
+    }
+  }
+  function decideCustom(decision: string) {
+    if (!result) return
+    setCustom((prev) => [{ term: result.term, count: result.count, decision }, ...prev.filter((c) => c.term !== result.term)])
+    setResult(null)
+    setTerm("")
   }
 
   return (
@@ -170,6 +206,58 @@ export default function AgentNetworkPage({ scanData, reviews }: Props) {
               )
             })}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Custom watchword search */}
+      <Card className="bg-neutral-900 border-neutral-700">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-xs text-neutral-400 tracking-wider">CUSTOM PII · WATCHWORD SEARCH</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-neutral-500 font-mono">
+            Count a custom term (a name, project codename, keyword) in the scanned document, then decide whether to track it as PII.
+          </p>
+          <div className="flex gap-3">
+            <Input
+              value={term}
+              onChange={(e) => setTerm(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") findTerm() }}
+              placeholder="e.g. Project Falcon, a specific name…"
+              className="flex-1 bg-neutral-800 border-neutral-600 text-white placeholder-neutral-500 font-mono text-sm"
+            />
+            <Button onClick={findTerm} disabled={finding || !term.trim()} className="bg-orange-500 hover:bg-orange-600 text-white">
+              {finding ? "SEARCHING…" : "FIND"}
+            </Button>
+          </div>
+          {result && (
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-neutral-800 rounded p-3 border border-neutral-700">
+              <div className="text-sm">
+                <span className="text-orange-500 font-mono">"{result.term}"</span> found{" "}
+                <span className="text-white font-mono font-bold">{result.count}</span> time(s) in the document
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => decideCustom("confirmed")} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-neutral-700 hover:bg-green-900 text-neutral-200">
+                  <CheckCircle className="w-3 h-3" /> ADD AS PII
+                </button>
+                <button onClick={() => decideCustom("rejected")} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-neutral-700 hover:bg-red-900 text-neutral-200">
+                  <XCircle className="w-3 h-3" /> IGNORE
+                </button>
+              </div>
+            </div>
+          )}
+          {custom.length > 0 && (
+            <div className="space-y-1.5 pt-1 border-t border-neutral-800">
+              {custom.map((c, i) => (
+                <div key={i} className={`flex items-center justify-between text-xs font-mono border-l-2 pl-2 py-1 ${c.decision === "confirmed" ? "border-green-500" : "border-neutral-600"}`}>
+                  <span className="text-neutral-300">"{c.term}" · {c.count}×</span>
+                  <span className={c.decision === "confirmed" ? "text-green-400" : "text-neutral-500"}>
+                    {c.decision === "confirmed" ? "TRACKED AS PII" : "IGNORED"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 

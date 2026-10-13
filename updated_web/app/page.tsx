@@ -22,6 +22,11 @@ export type AuditRow = {
   _conf: number
 }
 
+export type GoldItem = { page: number; context: string; category: string; found: boolean }
+export type OcrData = {
+  pages: { page: number; ocr_conf: number }[]
+  images: { artifact: string; image: string; ocr_conf: number }[]
+}
 export type ScanData = {
   sid: string
   filename: string
@@ -31,6 +36,9 @@ export type ScanData = {
   sealed: number
   residual: number
   audit: AuditRow[]
+  gold?: GoldItem[]
+  gold_recall?: [number, number, number]
+  ocr?: OcrData
 }
 
 // Preview data for ?demo — lets the dashboard show a populated state without waiting for a live scan.
@@ -65,6 +73,33 @@ const DEMO_SCAN: ScanData = {
   audit: DEMO_AUDIT.map(([category, tier, token, location, confidence, snippet], i) => ({
     category, tier, token, rule: "demo", location, confidence, snippet, _id: i, _conf: parseFloat(confidence),
   })),
+  gold_recall: [21, 25, 84.0],
+  gold: [
+    { page: 7, context: "narrative", category: "HOME_ADDRESS", found: true },
+    { page: 22, context: "narrative", category: "SSN", found: true },
+    { page: 22, context: "narrative", category: "PASSPORT", found: true },
+    { page: 22, context: "narrative", category: "PAN_IN", found: true },
+    { page: 23, context: "narrative", category: "DOB", found: true },
+    { page: 25, context: "table", category: "PAN_IN", found: true },
+    { page: 25, context: "table", category: "PESEL", found: true },
+    { page: 18, context: "image", category: "PAN_IN", found: true },
+    { page: 18, context: "image", category: "DOB", found: false },
+    { page: 28, context: "image", category: "DOB", found: false },
+    { page: 28, context: "image", category: "PHOTO", found: false },
+    { page: 20, context: "image", category: "CARD_PARTIAL", found: false },
+  ],
+  ocr: {
+    pages: [
+      { page: 7, ocr_conf: 95.5 }, { page: 18, ocr_conf: 92.1 }, { page: 20, ocr_conf: 88.4 },
+      { page: 22, ocr_conf: 95.0 }, { page: 25, ocr_conf: 93.2 }, { page: 28, ocr_conf: 90.8 },
+    ],
+    images: [
+      { artifact: "TPRM Training (DOCX)", image: "image7.png", ocr_conf: 96.4 },
+      { artifact: "TPRM Training (DOCX)", image: "image20.png", ocr_conf: 65.0 },
+      { artifact: "TPRM Training (DOCX)", image: "image31.png", ocr_conf: 55.5 },
+      { artifact: "Org Pack (PPTX)", image: "image1.png", ocr_conf: 96.4 },
+    ],
+  },
 }
 
 export default function TacticalDashboard() {
