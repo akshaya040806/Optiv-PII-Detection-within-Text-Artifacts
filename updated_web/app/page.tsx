@@ -1,13 +1,14 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { ChevronRight, Monitor, Search, BarChart2, ClipboardCheck, Activity, RefreshCw } from "lucide-react"
+import { ChevronRight, Monitor, Search, BarChart2, ClipboardCheck, Activity, RefreshCw, LayoutGrid } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import CommandCenterPage from "./command-center/page"
 import AgentNetworkPage from "./agent-network/page"
 import OperationsPage from "./operations/page"
 import IntelligencePage from "./intelligence/page"
 import SystemsPage from "./systems/page"
+import PageMapPage from "./pagemap/page"
 
 export type AuditRow = {
   category: string
@@ -115,6 +116,7 @@ export default function TacticalDashboard() {
   const sectionLabel: Record<string, string> = {
     overview: "COMMAND CENTER",
     agents: "FINDINGS",
+    pagemap: "PAGE MAP",
     operations: "BREAKDOWN",
     intelligence: "REVIEW QUEUE",
     systems: "PIPELINE",
@@ -123,6 +125,7 @@ export default function TacticalDashboard() {
   const navItems = [
     { id: "overview", icon: Monitor, label: "COMMAND CENTER" },
     { id: "agents", icon: Search, label: "FINDINGS" },
+    { id: "pagemap", icon: LayoutGrid, label: "PAGE MAP" },
     { id: "operations", icon: BarChart2, label: "BREAKDOWN" },
     { id: "intelligence", icon: ClipboardCheck, label: "REVIEW QUEUE" },
     { id: "systems", icon: Activity, label: "PIPELINE" },
@@ -267,6 +270,7 @@ export default function TacticalDashboard() {
             />
           )}
           {activeSection === "agents" && <AgentNetworkPage scanData={scanData} reviews={reviews} />}
+          {activeSection === "pagemap" && <PageMapPage scanData={scanData} />}
           {activeSection === "operations" && <OperationsPage scanData={scanData} />}
           {activeSection === "intelligence" && (
             <IntelligencePage scanData={scanData} reviews={reviews} setReviews={setReviews} />
