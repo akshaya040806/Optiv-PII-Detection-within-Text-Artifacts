@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, Fragment } from "react"
+import { useState, useEffect, Fragment } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Search } from "lucide-react"
@@ -16,6 +16,13 @@ export default function AgentNetworkPage({ scanData, reviews }: Props) {
   const [conf, setConf] = useState(0.8)
   const [tiers, setTiers] = useState({ Critical: true, High: true, Medium: true })
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [selectedCats, setSelectedCats] = useState<Set<string>>(
+    () => new Set(scanData?.audit.map((r) => r.category) ?? []),
+  )
+  // keep the category selection in sync with whatever document is loaded
+  useEffect(() => {
+    if (scanData) setSelectedCats(new Set(scanData.audit.map((r) => r.category)))
+  }, [scanData])
 
   if (!scanData) {
     return (
@@ -30,8 +37,22 @@ export default function AgentNetworkPage({ scanData, reviews }: Props) {
     (r) =>
       r._conf >= conf &&
       tiers[r.tier as keyof typeof tiers] &&
+      selectedCats.has(r.category) &&
       (!q || (r.token + " " + r.rule + " " + r.location + " " + r.category).toLowerCase().includes(q)),
   )
+
+  // category chips (counts over the whole scan)
+  const catList = Object.entries(
+    scanData.audit.reduce<Record<string, number>>((m, r) => ((m[r.category] = (m[r.category] || 0) + 1), m), {}),
+  ).sort((a, b) => b[1] - a[1])
+  const allCatNames = catList.map((c) => c[0])
+  function toggleCat(c: string) {
+    setSelectedCats((prev) => {
+      const n = new Set(prev)
+      n.has(c) ? n.delete(c) : n.add(c)
+      return n
+    })
+  }
 
   const tierColor = (tier: string) =>
     tier === "Critical" ? "text-red-500" : tier === "High" ? "text-orange-500" : "text-neutral-300"
@@ -115,6 +136,39 @@ export default function AgentNetworkPage({ scanData, reviews }: Props) {
             <span className="text-xs text-neutral-500 ml-auto font-mono">
               Showing {rows.length} of {scanData.audit.length}
             </span>
+          </div>
+
+          {/* Category picker */}
+          <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-neutral-800">
+            <span className="text-xs text-neutral-400 tracking-wider pt-2">CATEGORY</span>
+            <button
+              onClick={() => setSelectedCats(new Set(allCatNames))}
+              className="text-xs tracking-wider px-2 py-1 rounded text-neutral-300 hover:text-white mt-1"
+            >
+              ALL
+            </button>
+            <button
+              onClick={() => setSelectedCats(new Set())}
+              className="text-xs tracking-wider px-2 py-1 rounded text-neutral-500 hover:text-neutral-300 mt-1"
+            >
+              NONE
+            </button>
+            {catList.map(([c, n]) => {
+              const on = selectedCats.has(c)
+              return (
+                <button
+                  key={c}
+                  onClick={() => toggleCat(c)}
+                  className={`mt-1 px-2.5 py-1 rounded text-xs font-mono tracking-wider border transition-colors ${
+                    on
+                      ? "bg-orange-500/20 text-orange-400 border-orange-500/50"
+                      : "bg-neutral-800 text-neutral-500 border-neutral-700 hover:text-neutral-300"
+                  }`}
+                >
+                  {c} <span className="opacity-60">{n}</span>
+                </button>
+              )
+            })}
           </div>
         </CardContent>
       </Card>

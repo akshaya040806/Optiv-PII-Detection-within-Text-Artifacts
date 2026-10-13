@@ -77,11 +77,16 @@ export default function TacticalDashboard() {
 
   // restore from localStorage on mount (or seed demo data when ?demo is in the URL)
   useEffect(() => {
-    if (typeof window !== "undefined" && window.location.search.includes("demo")) {
-      setScanData(DEMO_SCAN)
-      setScanStatus("done")
-      setReviews({ "1": "confirmed", "4": "rejected" }) // show a confirmed + a rejected example
-      return
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search)
+      const sec = params.get("section")
+      if (sec) setActiveSection(sec) // deep-link to a section, e.g. ?section=agents
+      if (params.has("demo")) {
+        setScanData(DEMO_SCAN)
+        setScanStatus("done")
+        setReviews({ "1": "confirmed", "4": "rejected" }) // show a confirmed + a rejected example
+        return
+      }
     }
     try {
       const s = JSON.parse(localStorage.getItem("piiScan") || "null")
