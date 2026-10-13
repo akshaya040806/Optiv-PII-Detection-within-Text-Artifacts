@@ -32,6 +32,40 @@ export type ScanData = {
   audit: AuditRow[]
 }
 
+// Preview data for ?demo — lets the dashboard show a populated state without waiting for a live scan.
+const DEMO_AUDIT: [string, string, string, string, string, string][] = [
+  ["PERSON", "Medium", "PERSON-001", "table 2 r3c1", "0.85", "Risk owner [PERSON-001] attested the control"],
+  ["PERSON", "Medium", "PERSON-002", "para 44", "0.70", "escalated by [PERSON-002] on review"],
+  ["PERSON", "Medium", "PERSON-003", "slide 6", "0.85", "prepared by [PERSON-003]"],
+  ["PERSON", "Medium", "PERSON-004", "table 5 r2c4", "0.90", "reporter [PERSON-004] — Speak Up log"],
+  ["PERSON", "Medium", "PERSON-005", "para 120", "0.70", "approved by [PERSON-005]"],
+  ["PERSON", "Medium", "PERSON-006", "slide 11", "0.70", "contact [PERSON-006]"],
+  ["EMAIL", "Medium", "EMAIL-001", "para 44", "0.99", "reach [EMAIL-001] for queries"],
+  ["EMAIL", "Medium", "EMAIL-002", "table 2 r3c2", "0.99", "owner email [EMAIL-002]"],
+  ["EMAIL", "Medium", "EMAIL-003", "slide 11", "0.90", "[EMAIL-003] role mailbox"],
+  ["PHONE", "Medium", "PHONE-001", "slide 11", "0.90", "mobile [PHONE-001]"],
+  ["PHONE", "Medium", "PHONE-002", "para 44", "0.80", "tel [PHONE-002]"],
+  ["EMPLOYEE_ID", "Medium", "EMPLOYEE_ID-001", "table 2 r3c3", "0.97", "staff id [EMPLOYEE_ID-001]"],
+  ["EMPLOYEE_ID", "Medium", "EMPLOYEE_ID-002", "table 5 r4c1", "0.97", "vendor id [EMPLOYEE_ID-002]"],
+  ["SSN", "Critical", "SSN-001", "p.22", "0.95", "SSN on file [SSN-001]"],
+  ["PAN_IN", "Critical", "PAN_IN-001", "p.25", "0.95", "PAN [PAN_IN-001]"],
+  ["IBAN", "Critical", "IBAN-001", "para 70", "0.97", "settlement IBAN [IBAN-001]"],
+  ["HOME_ADDRESS", "High", "HOME_ADDRESS-001", "p.7", "0.95", "home address [HOME_ADDRESS-001]"],
+  ["DOB", "High", "DOB-001", "p.22", "0.95", "date of birth [DOB-001]"],
+]
+const DEMO_SCAN: ScanData = {
+  sid: "demo",
+  filename: "Cadence_TPRM_Training.docx",
+  masked_name: "Cadence_TPRM_Training_MASKED.docx",
+  findings: 18,
+  people: 6,
+  sealed: 2,
+  residual: 0,
+  audit: DEMO_AUDIT.map(([category, tier, token, location, confidence, snippet], i) => ({
+    category, tier, token, rule: "demo", location, confidence, snippet, _id: i, _conf: parseFloat(confidence),
+  })),
+}
+
 export default function TacticalDashboard() {
   const [activeSection, setActiveSection] = useState("overview")
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -41,8 +75,13 @@ export default function TacticalDashboard() {
   const [currentStep, setCurrentStep] = useState(-1)
   const [reviews, setReviews] = useState<Record<string, string>>({})
 
-  // restore from localStorage on mount
+  // restore from localStorage on mount (or seed demo data when ?demo is in the URL)
   useEffect(() => {
+    if (typeof window !== "undefined" && window.location.search.includes("demo")) {
+      setScanData(DEMO_SCAN)
+      setScanStatus("done")
+      return
+    }
     try {
       const s = JSON.parse(localStorage.getItem("piiScan") || "null")
       if (s?.data?.audit) {
