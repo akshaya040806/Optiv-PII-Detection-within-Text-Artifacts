@@ -124,17 +124,18 @@ def regex_spans(text):
     for m in re.finditer(r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b", text):
         if iban_ok(m.group()):
             add(m, "IBAN", 0.97, "iban-mod97")
-    # India Aadhaar — 12 digits (4-4-4), Verhoeff checksum; spaced or keyword to avoid matching random 12-digit
-    # runs. The (?<!\d )/(?! \d) guards stop it matching a 12-digit slice inside a longer card/account number.
+    # India Aadhaar — 12 digits (4-4-4), Verhoeff checksum + keyword. A spaced 12-digit run on its own is too
+    # common (dates, phone fragments) to trust on the checksum alone, so require an aadhaar/uid label nearby.
+    # The (?<!\d )/(?! \d) guards stop it matching a 12-digit slice inside a longer card/account number.
     for m in re.finditer(r"(?<!\d )\b[2-9]\d{3}\s?\d{4}\s?\d{4}\b(?! \d)", text):
-        c = _ctx(text, m.start(), m.end(), 16)
-        if verhoeff_ok(re.sub(r"\D", "", m.group())) and (" " in m.group() or "aadhaar" in c or "uid" in c):
-            add(m, "AADHAAR", 0.9, "aadhaar-verhoeff")
-    # UK NHS number — 10 digits (3-3-4), mod-11 checksum; spaced or keyword to avoid matching phone-like runs
+        c = _ctx(text, m.start(), m.end(), 20)
+        if ("aadhaar" in c or "uid" in c) and verhoeff_ok(re.sub(r"\D", "", m.group())):
+            add(m, "AADHAAR", 0.9, "aadhaar-verhoeff+keyword")
+    # UK NHS number — 10 digits (3-3-4), mod-11 checksum + keyword (same reasoning: phone-like runs collide).
     for m in re.finditer(r"(?<!\d )\b\d{3}\s?\d{3}\s?\d{4}\b(?! \d)", text):
-        c = _ctx(text, m.start(), m.end(), 16)
-        if nhs_ok(re.sub(r"\D", "", m.group())) and (" " in m.group() or "nhs" in c or "health" in c):
-            add(m, "NHS_NUMBER", 0.9, "nhs-mod11")
+        c = _ctx(text, m.start(), m.end(), 20)
+        if ("nhs" in c or "health" in c) and nhs_ok(re.sub(r"\D", "", m.group())):
+            add(m, "NHS_NUMBER", 0.9, "nhs-mod11+keyword")
     # UK National Insurance Number — structure + valid prefix letters
     for m in re.finditer(r"\b[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z]\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-D]\b", text):
         add(m, "NINO", 0.9, "uk-nino-structure")
