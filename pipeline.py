@@ -854,6 +854,9 @@ if __name__ == "__main__":
                                                 docx_img_ocr, pptx_img_ocr)}, open(cache, "wb"))
     with open(os.path.join(WORK, "all_text.txt"), "w", encoding="utf-8") as f_:
         f_.write("\n".join(s.text for s in pdf_segs + docx_segs + pptx_segs))
+    # per-segment text + location, so custom watchword search can report which page/section a term is on
+    json.dump([{"artifact": s.artifact, "loc": s.loc, "text": s.text} for s in pdf_segs + docx_segs + pptx_segs],
+              open(os.path.join(WORK, "segments.json"), "w", encoding="utf-8"))
     segs = pdf_segs + docx_segs + pptx_segs
     print("Stage 2/4  detecting PII…", flush=True)
     gaz = detect_all(segs)

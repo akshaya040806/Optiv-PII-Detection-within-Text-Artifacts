@@ -177,9 +177,28 @@ def api_health():
     return jsonify(status="ok", offline=True)
 
 
+def _page_label(loc):
+    """Map a finding/segment location to a page/section label + sort order (mirrors the UI's PAGE MAP)."""
+    m = re.match(r"p\.(\d+)", loc)
+    if m:
+        return "Page " + m.group(1), int(m.group(1))
+    m = re.search(r"slide (\d+)", loc, re.IGNORECASE)
+    if m:
+        return "Slide " + m.group(1), 1000 + int(m.group(1))
+    if loc.startswith("para"):
+        return "Body text", 9001
+    if loc.startswith("table"):
+        return "Tables", 9002
+    if loc.startswith("header") or "footer" in loc:
+        return "Header / Footer", 9003
+    if loc.startswith("metadata"):
+        return "Metadata", 9004
+    return loc, 9999
+
+
 @app.post("/api/v1/find")
 def api_find():
-    """Custom watchword: count occurrences of a user term in the scanned document text (server-side)."""
+    """Custom watchword: count a user term in the scanned document and report which pages/sections it's on."""
     if API_TOKEN and request.headers.get("X-API-Token") != API_TOKEN:
         return jsonify(error="unauthorized"), 401
     data = request.get_json(silent=True) or {}
@@ -189,12 +208,27 @@ def api_find():
         return jsonify(error="empty term"), 400
     if not s:
         return jsonify(error="unknown or expired session"), 404
-    txt = Path(s["outdir"]) / "_work" / "all_text.txt"
+    work = Path(s["outdir"]) / "_work"
+    pat = re.compile(re.escape(term), re.IGNORECASE)
+    segf = work / "segments.json"
+    if segf.exists():
+        segs = json.load(open(segf, encoding="utf-8"))
+        agg, total = {}, 0
+        for seg in segs:
+            c = len(pat.findall(seg.get("text", "")))
+            if not c:
+                continue
+            label, order = _page_label(seg.get("loc", ""))
+            a = agg.setdefault(label, {"count": 0, "order": order})
+            a["count"] += c
+            total += c
+        pages = [{"label": k, "count": v["count"]} for k, v in sorted(agg.items(), key=lambda kv: kv[1]["order"])]
+        return jsonify(term=term, count=total, pages=pages)
+    # fallback: flat text (count only, no page attribution)
+    txt = work / "all_text.txt"
     if not txt.exists():
         return jsonify(error="document text unavailable for this session"), 404
-    text = txt.read_text(encoding="utf-8", errors="replace")
-    count = len(re.findall(re.escape(term), text, re.IGNORECASE))
-    return jsonify(term=term, count=count)
+    return jsonify(term=term, count=len(pat.findall(txt.read_text(encoding="utf-8", errors="replace"))), pages=[])
 
 
 @app.post("/api/v1/redact")

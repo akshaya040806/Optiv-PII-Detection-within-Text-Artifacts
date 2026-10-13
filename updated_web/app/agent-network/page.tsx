@@ -20,10 +20,11 @@ export default function AgentNetworkPage({ scanData, reviews }: Props) {
   const [selectedCats, setSelectedCats] = useState<Set<string>>(
     () => new Set(scanData?.audit.map((r) => r.category) ?? []),
   )
+  type Pages = { label: string; count: number }[]
   const [term, setTerm] = useState("")
   const [finding, setFinding] = useState(false)
-  const [result, setResult] = useState<{ term: string; count: number } | null>(null)
-  const [custom, setCustom] = useState<{ term: string; count: number; decision: string }[]>([])
+  const [result, setResult] = useState<{ term: string; count: number; pages: Pages } | null>(null)
+  const [custom, setCustom] = useState<{ term: string; count: number; decision: string; pages: Pages }[]>([])
   // keep the category selection in sync with whatever document is loaded
   useEffect(() => {
     if (scanData) setSelectedCats(new Set(scanData.audit.map((r) => r.category)))
@@ -90,7 +91,7 @@ export default function AgentNetworkPage({ scanData, reviews }: Props) {
         alert(d.error || "Find failed")
         return
       }
-      setResult({ term: d.term, count: d.count })
+      setResult({ term: d.term, count: d.count, pages: d.pages || [] })
     } catch (e: any) {
       alert("Request failed: " + e.message)
     } finally {
@@ -99,7 +100,7 @@ export default function AgentNetworkPage({ scanData, reviews }: Props) {
   }
   function decideCustom(decision: string) {
     if (!result) return
-    setCustom((prev) => [{ term: result.term, count: result.count, decision }, ...prev.filter((c) => c.term !== result.term)])
+    setCustom((prev) => [{ term: result.term, count: result.count, decision, pages: result.pages }, ...prev.filter((c) => c.term !== result.term)])
     setResult(null)
     setTerm("")
   }
@@ -231,27 +232,46 @@ export default function AgentNetworkPage({ scanData, reviews }: Props) {
             </Button>
           </div>
           {result && (
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-neutral-800 rounded p-3 border border-neutral-700">
-              <div className="text-sm">
-                <span className="text-orange-500 font-mono">"{result.term}"</span> found{" "}
-                <span className="text-white font-mono font-bold">{result.count}</span> time(s) in the document
+            <div className="bg-neutral-800 rounded p-3 border border-neutral-700 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm">
+                  <span className="text-orange-500 font-mono">"{result.term}"</span> found{" "}
+                  <span className="text-white font-mono font-bold">{result.count}</span> time(s)
+                </div>
+                {result.count > 0 && (
+                  <div className="flex gap-2">
+                    <button onClick={() => decideCustom("confirmed")} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-neutral-700 hover:bg-green-900 text-neutral-200">
+                      <CheckCircle className="w-3 h-3" /> ADD AS PII
+                    </button>
+                    <button onClick={() => decideCustom("rejected")} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-neutral-700 hover:bg-red-900 text-neutral-200">
+                      <XCircle className="w-3 h-3" /> IGNORE
+                    </button>
+                  </div>
+                )}
               </div>
-              <div className="flex gap-2">
-                <button onClick={() => decideCustom("confirmed")} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-neutral-700 hover:bg-green-900 text-neutral-200">
-                  <CheckCircle className="w-3 h-3" /> ADD AS PII
-                </button>
-                <button onClick={() => decideCustom("rejected")} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-neutral-700 hover:bg-red-900 text-neutral-200">
-                  <XCircle className="w-3 h-3" /> IGNORE
-                </button>
-              </div>
+              {result.pages.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  <span className="text-[11px] text-neutral-500 font-mono">on:</span>
+                  {result.pages.map((p, i) => (
+                    <span key={i} className="text-[11px] font-mono bg-neutral-900 border border-neutral-700 rounded px-2 py-0.5 text-neutral-300">
+                      {p.label} <span className="text-orange-400">{p.count}</span>
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-neutral-500 font-mono">Not found in this document.</div>
+              )}
             </div>
           )}
           {custom.length > 0 && (
             <div className="space-y-1.5 pt-1 border-t border-neutral-800">
               {custom.map((c, i) => (
-                <div key={i} className={`flex items-center justify-between text-xs font-mono border-l-2 pl-2 py-1 ${c.decision === "confirmed" ? "border-green-500" : "border-neutral-600"}`}>
-                  <span className="text-neutral-300">"{c.term}" · {c.count}×</span>
-                  <span className={c.decision === "confirmed" ? "text-green-400" : "text-neutral-500"}>
+                <div key={i} className={`flex items-center justify-between gap-3 text-xs font-mono border-l-2 pl-2 py-1 ${c.decision === "confirmed" ? "border-green-500" : "border-neutral-600"}`}>
+                  <span className="text-neutral-300 min-w-0 truncate">
+                    "{c.term}" · {c.count}×
+                    {c.pages.length > 0 && <span className="text-neutral-500"> · {c.pages.map((p) => p.label).join(", ")}</span>}
+                  </span>
+                  <span className={`shrink-0 ${c.decision === "confirmed" ? "text-green-400" : "text-neutral-500"}`}>
                     {c.decision === "confirmed" ? "TRACKED AS PII" : "IGNORED"}
                   </span>
                 </div>
