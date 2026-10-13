@@ -183,4 +183,6 @@ def api_redact():
 if __name__ == "__main__":
     print("PII Gate UI  -> open http://127.0.0.1:5000  (Ctrl+C to stop)")
     print("PII Gate API -> POST http://127.0.0.1:5000/api/v1/redact  (GET /api/v1 for usage)")
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    # threaded: handle concurrent connections (needed when a Next.js dev proxy streams /scan, and
+    # for the batch UI firing scans back-to-back) — the single-threaded default drops streamed sockets.
+    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
